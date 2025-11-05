@@ -1,0 +1,29 @@
+FROM ubuntu:22.04
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    unzip \
+    bash \
+    gnupg \
+    ca-certificates \
+    software-properties-common \
+    redis-tools \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Istalling redis-dump-go
+RUN wget https://github.com/yannh/redis-dump-go/releases/download/v0.8.2/redis-dump-go-linux-amd64.tar.gz \
+    && tar -zxvf redis-dump-go-linux-amd64.tar.gz \
+    && mv redis-dump-go /usr/local/bin/redis-dump-go \
+    && chmod +x /usr/local/bin/redis-dump-go
+
+# Install AWS CLI v2
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip" \
+    && unzip /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip
+
+# Verify everything works
+RUN aws --version \
+    redis-dump-go --help

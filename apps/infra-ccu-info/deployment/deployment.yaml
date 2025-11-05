@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infra-ccu-info
+  namespace: justice
+  labels:
+    app: infra-ccu-info
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: infra-ccu-info
+  template:
+    metadata:
+      labels:
+        app: infra-ccu-info
+    spec:
+      containers:
+        - name: infra-ccu-info
+          image: 144436415367.dkr.ecr.us-west-2.amazonaws.com/infra-ccu-info:v0.1.0
+          envFrom:
+            - configMapRef:
+                name: infra-ccu-info
+          resources:
+            limits:
+              memory: "10Mi"
+              cpu: "10m"
+            requests:
+              memory: "10Mi"
+              cpu: "10m"
+          ports:
+            - containerPort: 8888
+              name: http-web-svc
+          livenessProbe:
+            httpGet:
+              path: /healthchecker
+              port: http-web-svc
+            failureThreshold: 1
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthchecker
+              port: http-web-svc
+            failureThreshold: 30
+            periodSeconds: 10

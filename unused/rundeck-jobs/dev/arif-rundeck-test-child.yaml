@@ -1,0 +1,85 @@
+- defaultTab: nodes
+  description: test
+  executionEnabled: true
+  id: 22b60bcf-e866-4f7a-b342-20b33de05cd7
+  loglevel: INFO
+  name: arif-rundeck-test-child
+  nodeFilterEditable: false
+  nodefilters:
+    dispatch:
+      excludePrecedence: true
+      keepgoing: false
+      rankOrder: ascending
+      successOnEmptyNodeFilter: false
+      threadcount: '1'
+    filter: .*
+  nodesSelectedByDefault: false
+  options:
+  - name: AWS_ACCOUNT_ID
+    required: false
+  - name: branchName
+    required: false
+  - name: changesCommitHash
+    required: false
+  - name: prState
+    required: false
+  - name: ssh-private-key
+    secure: true
+    storagePath: keys/project/Arif/id_rsa_iac_text
+    valueExposed: true
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - script: |-
+        #!/bin/bash
+        tempKey=$(mktemp)
+        echo "@option.ssh-private-key@" > ${tempKey}
+        sed -i -e 's/ /\n/g' ${tempKey}
+        sed -i -z "s/END\n/END /g;s/SSH\n/SSH /g;s/VATE\n/VATE /g;s/BEGIN\n/BEGIN /g" ${tempKey}
+
+        chmod 400 ${tempKey}
+
+        repoDir=$(mktemp -d)
+        mkdir -p ${repoDir}
+        cd ${repoDir}
+
+        GIT_SSH_COMMAND="ssh -i ${tempKey} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no" git clone git@bitbucket.org:accelbyte/iac.git
+        cd iac 
+        currentDir=$(pwd)
+        
+        ls -ltrah ${repoDir}
+
+        git checkout @option.branchName@
+        tmpCommitChangesDir=$(mktemp)
+        changedFiles=$(git show --stat=10000 @option.changesCommitHash@ | grep .hcl | awk '{print $1}' | sed 's/\...\///g')
+        for i in $(echo ${changedFiles}); do
+          dirname -- ${i} >> ${tmpCommitChangesDir}
+        done
+
+        echo "Changed directories:"
+        cat ${tmpCommitChangesDir}
+
+        echo "AWS_ACCOUNT_ID:"
+        echo @option.AWS_ACCOUNT_ID@
+
+        prState='@option.prState@'
+        
+        if [[ "${prState}" == "MERGED" ]]; then
+          echo "TODO: terragrunt apply"
+        else
+          for i in $(cat ${tmpCommitChangesDir} | sed '$!N; /^\(.*\)\n\1$/!P; D'); do
+            # TODO: parallelize
+            cd ${currentDir}/${i}
+            terragrunt plan
+          done
+          echo "TODO: terragrunt plan"
+        fi
+
+        echo "Cleaning up"
+        rm -rf ${repoDir}
+    
+    keepgoing: false
+    strategy: node-first
+  uuid: 22b60bcf-e866-4f7a-b342-20b33de05cd7

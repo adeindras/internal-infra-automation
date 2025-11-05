@@ -1,0 +1,9 @@
+{
+    "lock": {
+        "customerName": "${CUSTOMER_NAME}",
+        "projectName": "${PROJECT_NAME}",
+        "environmentName": "${ENVIRONMENT_NAME}",
+        "lastOperation": "${OPERATION}",
+        "lastExecutionTimestamp": "${CURRENT_TIMESTAMP}"
+    }
+}

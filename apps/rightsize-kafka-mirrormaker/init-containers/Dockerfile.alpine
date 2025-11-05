@@ -1,0 +1,16 @@
+# Use alpine image from Amazon ECR Public Gallery
+FROM public.ecr.aws/docker/library/alpine:3.22.2
+
+# Add bash and kcat (coreutils is part of busybox/alpine)
+# Note: kcat is in the 'community' repository
+RUN apk update && \
+    apk add --no-cache bash kcat
+
+# Copy your script from your local context into the image
+COPY init-script-mirrormaker1.sh /usr/local/bin/init-script-mirrormaker1.sh
+COPY init-script-mirrormaker2.sh /usr/local/bin/init-script-mirrormaker2.sh
+
+# Make sure it's executable
+RUN chmod +x /usr/local/bin/init-script-mirrormaker1.sh
+RUN chmod +x /usr/local/bin/init-script-mirrormaker2.sh
+

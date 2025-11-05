@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    karpenter.sh/do-not-evict: "true"
+  labels:
+    app: <pod_name>
+  name: <pod_name>
+  namespace: default
+spec:
+  containers:
+  - env:
+    - name: REMOTE_HOST
+      value: <remote_addr>
+    - name: REMOTE_PORT
+      value: "<remote_port>"
+    image: accelbyte/port-forward:1.0.2-alpine
+    imagePullPolicy: IfNotPresent
+    name: <pod_name>
+    resources: {}
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    ports:
+    - containerPort: 80
+      name: forwarder
+      protocol: TCP
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300

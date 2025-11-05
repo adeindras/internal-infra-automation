@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: docdb-compression
+spec:
+    containers:
+    - name: mongosh
+      image: 268237257165.dkr.ecr.us-west-2.amazonaws.com/mongosh:0.0.1-noble
+      command: ["sleep",  "1h"]
+      envFrom:
+        - secretRef:
+            name: mongo-secrets
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+      volumeMounts:
+        - mountPath: /data/db/scripts/
+          name: docdb-compression-scripts
+    restartPolicy: Never
+    terminationGracePeriodSeconds: 0
+    volumes:
+      - name: docdb-compression-scripts
+        configMap:
+          defaultMode: 0755
+          name: docdb-compression-scripts
+          optional: false

@@ -1,0 +1,33 @@
+{
+  "aws_db_subnet_group": {
+    "update": ["tags", "tags_all"],
+    "create": [],
+    "delete": []
+  },
+  "aws_rds_cluster": {
+    "update": ["tags", "tags_all"],
+    "create": [],
+    "delete": []
+  },
+  "aws_rds_cluster_instance": {
+    "update": [
+      "instance_class",
+      "tags",
+      "tags_all",
+      "promotion_tier",
+      "performance_insights_enabled"
+    ],
+    "create": [],
+    "delete": []
+  },
+  "aws_rds_cluster_parameter_group": {
+    "update": ["tags", "tags_all"],
+    "create": [],
+    "delete": []
+  },
+  "aws_security_group": {
+    "update": ["tags", "tags_all"],
+    "create": [],
+    "delete": []
+  }
+}

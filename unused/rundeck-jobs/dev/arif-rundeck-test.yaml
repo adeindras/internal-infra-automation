@@ -1,0 +1,75 @@
+- defaultTab: nodes
+  description: arif-rundeck-test
+  executionEnabled: true
+  id: d63a8183-61f2-4eaa-92df-eca57647f6b4
+  loglevel: INFO
+  name: arif-rundeck-test
+  nodeFilterEditable: false
+  options:
+  - name: whkpayload
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - plugins:
+        LogFilter:
+        - config:
+            invalidKeyPattern: \s|\$|\{|\}|\\
+            logData: 'true'
+            regex: ^RUNDECK:DATA:\s*([^\s]+?)\s*=\s*(.+)$
+            replaceFilteredResult: 'false'
+          type: key-value-data
+      script: |-
+        #!/bin/bash
+        payload='@unquotedoption.whkpayload@'
+        prIdentifier="autorightsizing"
+
+        actor=$(echo "${payload}" | jq -r '.actor.display_name')
+        changesCommitHash=$(echo "${payload}" | jq -r '.pullrequest.source.commit.hash')
+        branchName=$(echo "${payload}" | jq -r '.pullrequest.source.branch.name')
+        identifier=$(echo "${branchName}" | awk -F'-' '{print $1}')
+        awsAccountID=$(echo "${branchName}" | awk -F'-' '{print $2}')
+        envName=$(echo "${branchName}" | awk -F'-' '{print $3}')
+        prState=$(echo "${payload}" | jq -r '.pullrequest.state')
+
+
+        if [[ "${identifier}" != "${prIdentifier}" ]]; then 
+          echo "Not a rightsizing event, skipping..."
+          exit 0
+        fi
+
+        echo "Actor: ${actor}"
+        echo "Commit Hash: ${changesCommitHash}"
+        echo "Branch Name: ${branchName}"
+        echo "AWS Account ID: ${awsAccountID}"
+        echo "Environment Name: ${envName}"        
+
+        mergeDestinationBranch=$(echo "${payload}" | jq -r '.pullrequest.destination.branch.name')
+        if [[ "${mergeDestinationBranch}" != "master" ]]; then
+          exit 0
+        fi
+
+        # if this is a merge event
+        if [[ "${prState}" == "MERGED" ]]; then
+          changesCommitHash=$(echo "${payload}" | jq -r '.pullrequest.merge_commit.hash')
+          echo "Merge Destination = ${mergeDestinationBranch}"
+          echo "Merge Commit Hash = ${changesCommitHash}"
+        fi
+
+        echo "RUNDECK:DATA:AWS_ACCOUNT_ID=${awsAccountID}"
+        echo "RUNDECK:DATA:branchName=${branchName}"
+        echo "RUNDECK:DATA:changesCommitHash=${changesCommitHash}"
+        echo "RUNDECK:DATA:prState=${prState}"
+    - jobref:
+        args: -AWS_ACCOUNT_ID ${data.AWS_ACCOUNT_ID} -branchName ${data.branchName} -changesCommitHash=${data.changesCommitHash} -prState=${data.prState}
+        group: ''
+        name: arif-rundeck-test-child
+        nodeStep: 'true'
+        nodefilters:
+          filter: ${data.AWS_ACCOUNT_ID}.*terraform
+        useName: 'true'
+        uuid: 22b60bcf-e866-4f7a-b342-20b33de05cd7
+    keepgoing: false
+    strategy: node-first
+  uuid: d63a8183-61f2-4eaa-92df-eca57647f6b4

@@ -1,0 +1,46 @@
+	// list pods within namespace 
+	pods, err := getPodList(namespace, clientset)
+	if err != nil {
+		fmt.Println(err.Error)
+		os.Exit(1)
+	}
+
+	var message string
+	if namespace == "" {
+		message = "Total Pods in all namespaces"
+	} else {
+		message = fmt.Sprintf("Total Pods in namespace `%s`", namespace)
+	}
+	fmt.Printf("%s %d\n", message, len(pods.Items))
+
+	// list namespaces
+	namespaces, err := getNamespaceList(clientset)
+	if err != nil {
+		fmt.Println(err.Error)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Total namespaces: %d\n", len(namespaces.Items))
+
+	// list configmap
+	configmap, err := getConfigmapList(namespace, clientset)
+	if err != nil {
+		fmt.Println(err.Error)
+		os.Exit(1)
+	}
+
+	// for _, cfmap := range configmap.Items {
+	// 	fmt.Println(cfmap.Name)
+	// }
+
+	fmt.Printf("Total configmap: %d\n", len(configmap.Items))
+
+	// list kustomization
+	kustomizations, err := getKustomizationList("karpenter")
+	if err != nil {
+		log.Fatalf("Error retrieving Kustomizations: %v", err)
+	}
+	for _, kustomization := range kustomizations.Items {
+		fmt.Printf("Kustomization Name: %s, Namespace: %s\n", kustomization.Name, kustomization.Namespace)
+	}
+	

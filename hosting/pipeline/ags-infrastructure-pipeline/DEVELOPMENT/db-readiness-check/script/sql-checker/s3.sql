@@ -1,0 +1,10 @@
+select
+  name,
+  region,
+  account_id,
+  bucket_policy_is_public,
+  versioning_enabled,
+  server_side_encryption_configuration,
+  tags
+from
+  aws_s3_bucket

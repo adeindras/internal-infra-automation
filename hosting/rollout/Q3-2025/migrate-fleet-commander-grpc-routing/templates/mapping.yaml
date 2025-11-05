@@ -1,0 +1,26 @@
+apiVersion: getambassador.io/v2
+kind: Mapping
+metadata:
+  name: justice-fleet-commander-grpc
+  namespace: justice
+spec:
+  ambassador_id:
+  - --apiVersion-v3alpha1-only--default
+
+  grpc: true
+
+  circuit_breakers:
+  - max_connections: 3000000
+    max_pending_requests: 3000000
+    max_requests: 3000000
+  load_balancer:
+    policy: least_request
+
+  resolver: endpoint
+  retry_policy:
+    num_retries: 5
+    retry_on: gateway-error
+  
+  prefix: /fleet_commander
+  rewrite: ""
+  service: justice-fleet-commander:81

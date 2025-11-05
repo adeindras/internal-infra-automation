@@ -1,0 +1,86 @@
+# This blueprint is for a tenant requiring 100 RPS.
+resources:
+  - name: rds-aurora-dreamhaven-justice-stage-justice-cluster
+    type: aws-rds-aurora-provisioned
+    spec:
+      instanceClass: db.r6g.4xlarge
+  - name: rds-dreamhaven-justice-stage-justice-lobby
+    type: aws-rds-postgresql
+    spec:
+      instanceClass: db.m6g.large
+  - name: rds-dreamhaven-justice-stage-analytics
+    type: aws-rds-postgresql
+    spec:
+      instanceClass: db.m6g.xlarge
+  - name: docdb-cluster-dreamhaven-justice-stage-os
+    type: aws-docdb-cluster
+    spec:
+      instanceClass: db.r6g.8xlarge
+  - name: docdb-cluster-dreamhaven-justice-stage-os-basic
+    type: aws-docdb-cluster
+    spec:
+      instanceClass: db.r6g.large
+  - name: docdb-elastic-dreamhaven-justice-stage-clg
+    type: aws-docdb-elastic
+    spec:
+      shardCount: 8
+      shardInstanceCount: 2
+      shardCapacity: 16
+  - name: r-dreamhaven-justice-stage-analytics
+    type: aws-elasticache-redis
+    spec:
+      instaceClass: cache.m6g.large
+  - name: r-dreamhaven-justice-stage-justice
+    type: aws-elasticache-redis
+    spec:
+      instanceClass: cache.m6g.large
+  - name: msk-cluster-dreamhaven-justice-stage-justice
+    type: aws-msk-cluster
+    spec:
+      instanceClass: kafka.m5.4xlarge
+  - name: dreamhaven-stage-justice
+    type: aws-opensearch-domain
+    spec:
+      instanceClass: "r6g.large.search"
+  - name: justice-iam-service
+    type: k8s-deployment
+    namespace: justice
+    spec:
+      replicas: 2
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "1Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+  - name: justice-iam-service
+    type: k8s-hpa
+    namespace: justice
+    spec:
+      maxReplicas: 100
+      minReplicas: 2
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 50
+        - type: Resource
+          resource:
+            name: memory
+            target:
+              type: Utilization
+              averageUtilization: 500
+  - name: justice-iam-service
+    type: k8s-mesh
+    namespace: justice
+    spec:
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "300Mi"
+        requests:
+          cpu: "25m"
+          memory: "300Mi"

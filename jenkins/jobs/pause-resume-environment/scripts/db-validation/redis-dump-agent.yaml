@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "<job_name>"
+  namespace: justice
+  labels:
+    app: pause-resume-redis-dump-job
+    component: justice-pause-resume
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      name: "pause-resume-redis-dump-job"
+    spec:
+      restartPolicy: Never
+      serviceAccount: pause-resume-redis-dump-job
+      containers:
+        - name: db-seeding-job
+          image: "144436415367.dkr.ecr.us-west-2.amazonaws.com/accelbyte/redis-dump:ubuntu-golang"
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 0
+          command: ["sh", "/tmp/redis-dump-script.sh", "-o", "<redis_operation>", "<redis_instance_prefix>"]
+          envFrom:
+            - secretRef:
+                name: justice-iam-service-secret
+          env:
+            - name: ENVIRONMENT_NAME
+              value: "<environment_name>"
+            - name: PROJECT_NAME
+              value: "<project_name>"
+            - name: CUSTOMER_NAME
+              value: "<customer_name>"
+            - name: REDIS_ADDR
+              value: "<redis_addr>"
+            - name: CURRENT_TIMESTAMP
+              value: "<current_timestamp>"
+          volumeMounts:
+            - name: redisdump
+              mountPath: /tmp/
+      volumes:
+        - name: redisdump
+          configMap:
+            name: "justice-pause-resume-redis-dump"

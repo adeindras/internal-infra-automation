@@ -1,0 +1,170 @@
+- defaultTab: nodes
+  description: ''
+  executionEnabled: true
+  group: upstream
+  id: 94b490cc-2cfd-4933-9b70-e0d31fb04bcd
+  loglevel: INFO
+  name: Template data auto-update
+  nodeFilterEditable: false
+  options:
+  - hidden: true
+    name: GCP_SERVICE_ACCOUNT_JSON
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/gcp-sheets-reader-serviceaccount.json
+    valueExposed: true
+  - hidden: true
+    name: GSHEETS_DOCUMENT_KEY
+    value: 1cJSIqn3nnh4bbhqi3g0KIQajFlVyRQSQaQlAbXDzNKg
+  - hidden: true
+    name: bitbucket_app_key
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/bitbucket_app_key
+    valueExposed: true
+  - hidden: true
+    name: bitbucket_ssh
+    secure: true
+    storagePath: keys/terraform/bitbucket
+    valueExposed: true
+  plugins:
+    ExecutionLifecycle: null
+  schedule:
+    month: '*'
+    time:
+      hour: '*/6'
+      minute: '0'
+      seconds: '0'
+    weekday:
+      day: '*'
+    year: '*'
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - description: install-deps
+      script: |-
+        #!/bin/bash
+
+        pip3 install gspread
+
+        echo $RD_OPTION_GSHEETS_DOCUMENT_KEY
+
+        tmp_dir=$(mktemp -d)
+
+        pushd $tmp_dir > /dev/null
+        touch sa.json
+        cat <<< $RD_OPTION_GCP_SERVICE_ACCOUNT_JSON > sa.json
+        popd > /dev/null
+
+        echo "RUNDECK:DATA:TMP_DIR = $tmp_dir"
+    - description: generate-json
+      script: |
+        #!/usr/bin/env python3
+
+        import os, sys
+        import json
+        import gspread
+        from datetime import datetime
+
+        # load env vars
+        check_env_vars = ["RD_OPTION_GSHEETS_DOCUMENT_KEY"]
+
+        env_vars_not_found = False
+
+        for i in range(len(check_env_vars)):
+            if os.getenv(check_env_vars[i]) == None:
+                env_vars_not_found = True
+                print("{} is empty".format(check_env_vars[i]))
+
+        if env_vars_not_found == True:
+            print("A required env vars was not fulfilled or empty. Please add the env var and try again.")
+            sys.exit(1)
+
+        GSHEETS_DOCUMENT_KEY = os.getenv("RD_OPTION_GSHEETS_DOCUMENT_KEY")
+        GCP_SERVICE_ACCOUNT_JSON = '@data.TMP_DIR@/sa.json'
+
+        gc = gspread.service_account(filename=GCP_SERVICE_ACCOUNT_JSON)
+
+        # set the document key. it should be obtained from the link
+        s = gc.open_by_key(GSHEETS_DOCUMENT_KEY)
+
+        # set the worksheet name
+        ws = s.worksheet('msa')
+
+        list_of_dicts = ws.get_all_records()
+
+        try:
+            f = open("@data.TMP_DIR@/latest.json", "w")
+            x = json.dumps(list_of_dicts)
+            f.write(x)
+            f.close()
+        except Exception as e:
+            print(e)
+            sys.exit(1)
+    - description: git-clone-push
+      script: "#!/usr/bin/env bash\n\n# set -euo pipefail\n\nurl=\"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pull_request_id}/merge\"\
+        \n\n# set vars\nTMP_DIR=\"@data.TMP_DIR@\"\nDATETIME_NOW=$(date +%s)\nREPO_PATH=\"\
+        ${TMP_DIR}\"\nREPO_NAME=\"internal-infra-automation\"\nBRANCH_NAME=\"autorightsizing-template-update-${DATETIME_NOW}\"\
+        \n\nbitbucket_api_url=\"https://bitbucket.org/api/2.0/repositories/accelbyte\"\
+        \n\n# Prepare SSH Connection for Git\n# Create a temporary file\nTEMPFILE=$(mktemp)\n\
+        TEMPFILE2=$(mktemp)\nTEMPFILE3=$(mktemp)\n\n# Set a trap to delete the temporary\
+        \ file when the script exits\ntrap \"rm -f $TEMPFILE\" EXIT\ntrap \"rm -f\
+        \ $TEMPFILE2\" EXIT\ntrap \"rm -f $TEMPFILE3\" EXIT\necho \"bitbucket.org\
+        \ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQeJzhupRu0u0cdegZIa8e86EG2qOCsIsD1Xw0xSeiPDlCr7kq97NLmMbpKTX6Esc30NuoqEEHCuc7yWtwp8dI76EEEB1VqY9QJq6vk+aySyboD5QF61I/1WeTwu+deCbgKMGbUijeXhtfbxSxm6JwGrXrhBdofTsbKRUsrN1WoNgUa8uqN1Vx6WAJw1JHPhglEGGHea6QICwJOAr/6mrui/oB7pkaWKHj3z7d1IC4KWLtY47elvjbaTlkN04Kc/5LFEirorGYVbt15kAUlqGM65pk6ZBxtaO3+30LVlORZkxOh+LKL/BvbZ/iRNhItLqNyieoQj/uh/7Iv4uyH/cV/0b4WDSd3DptigWq84lJubb9t/DnZlrJazxyDCulTmKdOR7vs9gMTo+uoIrPSb8ScTtvw65+odKAlBj59dhnVp9zd7QUojOpXlL62Aw56U4oO+FALuevvMjiWeavKhJqlR7i5n9srYcrNV7ttmDw7kf/97P5zauIhxcjX+xHv4M=\"\
+        \ > $TEMPFILE3\necho \"@option.bitbucket_ssh@\" > $TEMPFILE\nsed -i -e 's/\
+        \ /\\n/g' $TEMPFILE\necho \"-----BEGIN OPENSSH PRIVATE KEY-----\" >> $TEMPFILE2\n\
+        cat $TEMPFILE >> $TEMPFILE2\necho \"-----END OPENSSH PRIVATE KEY-----\" >>\
+        \ $TEMPFILE2\n\n# PR payload and functions\npr_payload_template='{\"title\"\
+        : \"\", \"source\": {\"branch\": {\"name\": \"\"}}, \"reviewers\": [], \"\
+        destination\": {\"branch\": {\"name\": \"master\"}}, \"close_source_branch\"\
+        : false}'\n# pr_merge_payload_template='{\"close_source_branch\": true,\"\
+        \ message\":\"pr-merge-message-here\",\"merge_strategy\":\"squash\"}'\npr_merge_payload_template='{\"\
+        close_source_branch\": true, \"merge_strategy\":\"squash\"}'\n\n\nfunction\
+        \ create_bitbucket_pr() {\n  echo \"[+] Creating PR\"\n  branch=$1\n  pr_payload=$(echo\
+        \ $pr_payload_template | yq '.title = \"feat: update autorightsizing template\
+        \ - '\"${DATETIME_NOW}\"'\" | .source.branch.name = \"'\"${branch}\"'\"')\n\
+        \  \n  curl -s -XPOST -H \"Content-Type: application/json\" -H \"Authorization:\
+        \ Basic ${RD_OPTION_BITBUCKET_APP_KEY}\" \"${bitbucket_api_url}/${REPO_NAME}/pullrequests\"\
+        \ -d \"${pr_payload}\"\n}\n\nfunction merge_bitbucket_pr() {\n  branch=$1\n\
+        \  \n  pr_url_id=$(curl -s -XGET -H \"Content-Type: application/json\" -H\
+        \ \"Authorization: Basic ${RD_OPTION_BITBUCKET_APP_KEY}\" \"${bitbucket_api_url}/${REPO_NAME}/pullrequests\"\
+        \ | jq -r '.values[] | \"\\(.source.branch.name) \\(.links.html.href)\"' |\
+        \ grep \"${branch}\" | awk '{print $2}' | cut -f7 -d'/')\n  echo \"Pull request\
+        \ ID: ${pr_url_id}\"\n  pr_merge_payload=$(echo $pr_merge_payload_template)\
+        \ # | yq '.message = \"feat: update autorightsizing template - '\"${DATETIME_NOW}\"\
+        '\"')\n\n  echo \"[+] Merging PR\"\n  curl -s -XPOST -H \"Content-Type: application/json\"\
+        \ -H \"Authorization: Basic ${RD_OPTION_BITBUCKET_APP_KEY}\" \"${bitbucket_api_url}/${REPO_NAME}/pullrequests/${pr_url_id}/merge\"\
+        \ -d \"${pr_merge_payload}\"\n}\n\n\n# echo \"Checking out iac with path @option.checkout_path@\"\
+        \n# REPO_DIR=/home/rundeck/@option.repo_path@\n# mkdir -p $REPO_PATH\necho\
+        \ \"Checking out ${REPO_NAME} with path ${REPO_PATH}\"\ncd $REPO_PATH\n\n\
+        GIT_SSH_COMMAND=\"ssh -i ${TEMPFILE2} -o IdentitiesOnly=yes -o UserKnownHostsFile=${TEMPFILE3}\"\
+        \ git clone --depth 1 --quiet \"git@bitbucket.org:accelbyte/${REPO_NAME}.git\"\
+        \n\npushd \"${REPO_PATH}/${REPO_NAME}\" > /dev/null\n\ncp \"$REPO_PATH/latest.json\"\
+        \ \"$REPO_PATH/${REPO_NAME}/templates/latest.json\"\n\n\nget_changes=$(git\
+        \ diff --name-only | cat | wc -l)\n\nif [[ $get_changes -ge 1 ]]; then\n \
+        \   echo \"Changes detected, attempting to update JSON file to bitbucket ...\"\
+        \n    git checkout -b \"${BRANCH_NAME}\"\n    \n    echo \"[+] Executing git\
+        \ config\"\n    git config user.email \"build@accelbyte.net\"\n    git config\
+        \ user.name \"Build AccelByte\"\n\n    git add .\n    git commit -am \"feat:\
+        \ update autorightsizing template - ${DATETIME_NOW}\"\n    GIT_SSH_COMMAND=\"\
+        ssh -i ${TEMPFILE2} -o IdentitiesOnly=yes -o UserKnownHostsFile=${TEMPFILE3}\"\
+        \ git push --set-upstream origin \"${BRANCH_NAME}\"\n    \n    create_bitbucket_pr\
+        \ \"${BRANCH_NAME}\"\n    merge_bitbucket_pr \"${BRANCH_NAME}\"\nelse\n  \
+        \  echo \"No changes detected, skipping ...\"\nfi\n\npopd > /dev/null\n"
+    - description: cleanup
+      script: |-
+        #!/bin/bash
+
+        TMP_DIR="@data.TMP_DIR@"
+
+        rm -rf $TMP_DIR
+    keepgoing: false
+    pluginConfig:
+      LogFilter:
+      - config:
+          invalidKeyPattern: \s|\$|\{|\}|\\
+          logData: 'false'
+          regex: ^RUNDECK:DATA:\s*([^\s]+?)\s*=\s*(.+)$
+          replaceFilteredResult: 'false'
+        type: key-value-data
+    strategy: node-first
+  timeZone: Etc/GMT+0
+  uuid: 94b490cc-2cfd-4933-9b70-e0d31fb04bcd

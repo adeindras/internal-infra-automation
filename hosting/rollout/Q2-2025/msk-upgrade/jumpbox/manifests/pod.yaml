@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: jumpbox-msk-upgrade
+spec:
+    containers:
+    - name: jumpbox-kafka
+      image: 144436415367.dkr.ecr.us-west-2.amazonaws.com/jumpbox-image:kafka-3.11.6
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+      volumeMounts:
+        - mountPath: /srv/kafka-properties
+          name: jumpbox-kafka-secrets
+    restartPolicy: Never
+    terminationGracePeriodSeconds: 0
+    volumes:
+      - name: jumpbox-kafka-secrets
+        secret:
+          secretName: jumpbox-kafka-secrets
+          optional: false

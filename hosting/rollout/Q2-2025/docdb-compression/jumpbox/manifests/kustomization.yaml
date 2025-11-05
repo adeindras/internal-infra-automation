@@ -1,0 +1,16 @@
+# declare ConfigMap from a ConfigMapGenerator
+#
+resources:
+  - ./pod.yaml
+
+configMapGenerator:
+- name: docdb-compression-scripts
+  files:
+    - verify_compression.js=./scripts/verify_compression.js
+    - dry_run_compression.js=./scripts/dry_run_compression.js
+    - enable_compression.js=./scripts/enable_compression.js
+
+secretGenerator:
+- name: mongo-secrets
+  envs:
+    - mongo.env

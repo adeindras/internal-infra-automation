@@ -1,0 +1,229 @@
+- defaultTab: nodes
+  description: Create rightsizing requests here
+  executionEnabled: true
+  id: 629bc435-ed4a-404d-9287-d389aa98873c
+  loglevel: INFO
+  name: main-rightsizing-job
+  nodeFilterEditable: false
+  options:
+  - delimiter: ','
+    enforced: true
+    label: Applied resources
+    multivalued: true
+    name: applied_resources
+    required: true
+    sortValues: true
+    value: 'msk,rds_analytics,rds_justice,docdb,elasticache,opensearch'
+    values:
+    - docdb
+    - elasticache
+    - msk
+    - opensearch
+    - rds_analytics
+    - rds_justice
+    - rds_justice_replica
+    valuesListDelimiter: ','
+  - enforced: true
+    label: Target CCU
+    name: target_ccu
+    required: true
+    value: '200'
+    values:
+    - '200'
+    - '800'
+    - '1000'
+    - '2000'
+    - '3000'
+    - '4000'
+    - '5000'
+    - '6000'
+    - '7500'
+    - '10000'
+    - '15000'
+    - '18000'
+    - '20000'
+    - '25000'
+    - '30000'
+    - '40000'
+    - '50000'
+    - '60000'
+    - '70000'
+    - '75000'
+    - '80000'
+    - '90000'
+    - '100000'
+    - '110000'
+    - '120000'
+    valuesListDelimiter: ' '
+  - enforced: true
+    label: Target environment name
+    name: target_environment_name
+    optionValuesPluginType: ab-multi-account-option
+    required: true
+    value: '455912570532,sandbox-justice-dev,us-east-2'
+  - hidden: true
+    name: bitbucket_app_key
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/bitbucket_app_key
+    valueExposed: true
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - description: generate-vars
+      script: |+
+        #!/bin/bash
+
+        CURRENT_TIMESTAMP="$(date +%s)"
+        TEMP_DIR="$(mktemp -d)"
+        TARGET_ENVIRONMENT_NAME="$RD_OPTION_TARGET_ENVIRONMENT_NAME"
+
+        AWS_ACCOUNT_ID="$(echo $TARGET_ENVIRONMENT_NAME | cut -f1 -d',')"
+        AWS_REGION="$(echo $TARGET_ENVIRONMENT_NAME | cut -f3 -d',')"
+        CUSTOMER_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f1 -d'-')"
+        PROJECT_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f2 -d'-')"
+        ENVIRONMENT_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f3 -d'-')"
+
+        echo "RUNDECK:DATA:CURRENT_TIMESTAMP = $CURRENT_TIMESTAMP"
+        echo "RUNDECK:DATA:TEMP_DIR = $TEMP_DIR"
+        echo "RUNDECK:DATA:TARGET_ENVIRONMENT_NAME = $TARGET_ENVIRONMENT_NAME"
+
+    - description: git-clone
+      jobref:
+        args: -repo_path ${data.TEMP_DIR}
+        group: gitops
+        importOptions: true
+        name: Clone IAC Repo
+        nodeStep: 'true'
+        uuid: e981b6ee-142b-4de3-89f7-b1956db22de2
+    - description: update-terragrunt
+      script: |-
+        #!/bin/bash
+
+        # load vars
+        # CURRENT_TIMESTAMP=$(date +%s)
+
+        TARGET_ENVIRONMENT_NAME="$RD_OPTION_TARGET_ENVIRONMENT_NAME"
+        TARGET_CCU="$RD_OPTION_TARGET_CCU"
+        APPLIED_RESOURCES="$RD_OPTION_APPLIED_RESOURCES"
+
+        AWS_ACCOUNT_ID="$(echo $TARGET_ENVIRONMENT_NAME | cut -f1 -d',')"
+        AWS_REGION="$(echo $TARGET_ENVIRONMENT_NAME | cut -f3 -d',')"
+        CUSTOMER_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f1 -d'-')"
+        PROJECT_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f2 -d'-')"
+        ENVIRONMENT_NAME="$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f3 -d'-')"
+
+        # cloned IAC repo
+        REPO_DIR="@data.TEMP_DIR@/iac"
+
+        TEMPLATE_WORKSPACE="accelbyte"
+        TEMPLATE_REPO_NAME="internal-infra-automation"
+        TEMPLATE_BRANCH_NAME="master"
+        TEMPLATE_FILE_PATH="templates/latest.json"
+        BITBUCKET_APP_KEY="$RD_OPTION_BITBUCKET_APP_KEY"
+
+        # curl -s -S --user "${USERNAME}:${PASSWORD}" -L -O "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_NAME}/src/${BRANCH_NAME}/${FILE_PATH}"
+        scaling_template=$(curl -s -S -H "Authorization: Basic ${BITBUCKET_APP_KEY}" "https://api.bitbucket.org/2.0/repositories/${TEMPLATE_WORKSPACE}/${TEMPLATE_REPO_NAME}/src/${TEMPLATE_BRANCH_NAME}/${TEMPLATE_FILE_PATH}")
+
+        # scaling_template=$(cat <<< $get_template | yq '[{"name": .metadata.name, "template-type": .metadata.label.template-type}]')
+        # get_len=$(cat <<< $list | yq length)
+
+        function modify_rds_justice() {
+            # echo "modifying rds_justice"
+            source_instance_type=$(cat terragrunt.hcl | grep rds_instance_class | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').rds_justice_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        function modify_rds_analytics() {
+            source_instance_type=$(cat terragrunt.hcl | grep rds_instance_class | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').rds_analytics_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+            # echo "modifying rds_analytics"
+        }
+
+        function modify_opensearch() {
+            # echo "modifying opensearch"
+            source_instance_type=$(cat terragrunt.hcl | grep instance_type | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').opensearch_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        function modify_msk() {
+            # echo "modifying msk"
+            source_instance_type=$(cat terragrunt.hcl | grep broker_instance_type | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').msk_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        function modify_docdb() {
+            # echo "modifying docdb"
+            source_instance_type=$(cat terragrunt.hcl | grep instance_class | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').docdb_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        function modify_elasticache() {
+            # echo "modifying elasticache"
+            source_instance_type=$(cat terragrunt.hcl | grep instance_type | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').elasticache_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        function modify_rds_justice_replica() {
+            # echo "modifying rds_justice_replica"
+            source_instance_type=$(cat terragrunt.hcl | grep rds_instance_type | awk '{print $3}' | tr -d '"')
+            target_instance_type=$(cat <<< ${scaling_template} | yq '.[] | select(.ccu == '"${TARGET_CCU}"').rds_justice_replica_instance_type')
+            sed -i "s/${source_instance_type}/${target_instance_type}/g" terragrunt.hcl
+        }
+
+        pushd "$REPO_DIR" > /dev/null
+
+        for i in $APPLIED_RESOURCES; do
+
+            # As of now, we do not have support for modifying custom/splitted resources
+            if [[ $i == "rds_justice" ]]; then
+                x="rds/justice"
+            elif [[ $i == "rds_justice_replica" ]]; then
+                x="rds/justice-replica"
+            elif [[ $i == "rds_analytics" ]]; then
+                x="rds/analytics"
+            elif [[ $i == "opensearch" ]]; then
+                x="opensearch/logging"
+            elif [[ $i == "elasticache" ]]; then
+                x="elasticache/justice"
+            else
+                x="$i"
+            fi
+
+            echo "[+] Updating $x"
+
+            if [[ -d $PWD/live/$AWS_ACCOUNT_ID/$CUSTOMER_NAME/$PROJECT_NAME/$AWS_REGION/$ENVIRONMENT_NAME/$x/ ]]; then
+                pushd live/$AWS_ACCOUNT_ID/$CUSTOMER_NAME/$PROJECT_NAME/$AWS_REGION/$ENVIRONMENT_NAME/$x/ > /dev/null
+                "modify_${i}"
+                popd > /dev/null
+            fi
+
+            # echo "live/$AWS_ACCOUNT_ID/$CUSTOMER_NAME/$PROJECT_NAME/$AWS_REGION/$ENVIRONMENT_NAME/$x/terragrunt.hcl"
+        done
+    - description: git-push
+      jobref:
+        args: -repo_path ${data.TEMP_DIR} -target_environment_name ${data.TARGET_ENVIRONMENT_NAME}
+          -create_slack_notification true
+        group: upstream
+        importOptions: true
+        name: Push IAC Repo
+        nodeStep: 'true'
+        uuid: f4e42ed7-3528-4d3f-846f-1520cc06f8f1
+    keepgoing: false
+    pluginConfig:
+      LogFilter:
+      - config:
+          invalidKeyPattern: \s|\$|\{|\}|\\
+          logData: 'true'
+          regex: ^RUNDECK:DATA:\s*([^\s]+?)\s*=\s*(.+)$
+          replaceFilteredResult: 'false'
+        type: key-value-data
+    strategy: node-first
+  uuid: 629bc435-ed4a-404d-9287-d389aa98873c

@@ -1,0 +1,7 @@
+{
+    "single_table": [
+        "docdb_instances",
+        "eventbridge",
+        "kafka_topic_partitions"
+    ]
+}

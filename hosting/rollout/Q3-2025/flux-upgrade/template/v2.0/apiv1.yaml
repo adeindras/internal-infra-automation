@@ -1,0 +1,9 @@
+patches:
+  - patch: |-
+      - op: replace
+        path: "/apiVersion"
+        value: "kustomize.toolkit.fluxcd.io/v1"
+    target:
+      group: kustomize.toolkit.fluxcd.io
+      version: v1beta1
+      name: cluster-secret-store

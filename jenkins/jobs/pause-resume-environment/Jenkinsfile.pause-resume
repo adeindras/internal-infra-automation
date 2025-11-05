@@ -1,0 +1,1075 @@
+// Pipeline variables
+customerName = params.customerName
+projectName = params.projectName
+environmentName = params.environmentName
+awsAccountID = params.awsAccountID
+environmentGrade = params.environmentGrade
+mongoMode = params.mongoMode
+awsRegion = params.awsRegion
+gateKeepingConfirmed = params.gateKeepingConfirmed
+operation = params.operation
+includeMSK = params.includeMSK
+includeFleet = params.includeFleet
+sendNotification = params.sendNotification
+slackChannelId = "C017L2M1C3D"
+//whoRuns = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.shortDescription.replace(":", "").split("\\{")[0].trim()
+// Get build causes
+def causes = currentBuild.getBuildCauses()
+
+// Check for manual trigger user
+def userCause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+
+// Check for scheduler trigger
+def paramTimerCause = causes.find { it._class == 'org.jenkinsci.plugins.parameterizedscheduler.ParameterizedTimerTriggerCause' }
+
+// Determine who triggered the build
+if (userCause && userCause[0]?.userId) {
+    whoRuns = userCause[0].userId
+} else if (paramTimerCause) {
+    whoRuns = "Scheduled Trigger (Parameterized Scheduler)"
+} else {
+    whoRuns = "Unknown Trigger"
+}
+
+echo "Job was triggered by: ${whoRuns}"
+
+
+// The list of allowed environments to be paused
+String[] allowedEnvironments = [
+    "abcdexample-justice-dev2",
+    "accelbyte-justice-stage",
+    "foundations-justice-stage",
+    "genpop-justice-prod",
+    "cet-justice-dev",
+    "loadtest-justice-prod"
+]
+
+timeout(time: 4, unit: 'HOURS') { // force abort pipeline after 4 hours of execution
+    node('infra-pause-resume'){
+        container('tool'){
+            stage("Creating Slack Notif Thread"){
+                stageBanner("STAGE: SENDING REPORT TO SLACK")
+                String notifElements = """
+                        {
+                            "type": "rich_text_section",
+                            "elements": [
+                                {
+                                    "type": "text",
+                                    "text": "Selected environment : ${customerName}-${projectName}-${environmentName}"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "rich_text_section",
+                            "elements": [
+                                {
+                                    "type": "text",
+                                    "text": "Trigered by: ${whoRuns}"
+                                }
+                            ]
+                        },
+                """
+                if (sendNotification) {
+                    notifThreadId = initialSlackNotif(notifElements)
+                }
+            }
+            try {
+                stage('Initializing Agent'){
+                    cleanUp()
+                    stageBanner("STAGE: INITIALIZING AGENT'S ENVVAR")
+                    println "Parsed pipeline variables :"
+                    println "----------------------------------------------------------"
+                    println "Customer name          : "+ customerName
+                    println "Environment name       : "+ environmentName
+                    println "Project name           : "+ projectName
+                    println "AWS Account ID         : "+ awsAccountID
+                    println "Environment grade      : "+ environmentGrade
+                    println "MongoDB server mode    : "+ mongoMode
+                    println "AWS Region             : "+ awsRegion
+                    println "Gate keeping confirmed : "+ gateKeepingConfirmed
+                    println "Operation              : "+ operation
+                    println "----------------------------------------------------------"
+
+                    currentBuild.displayName = "#${BUILD_NUMBER} -  ${customerName}-${projectName}-${environmentName} : ${operation}"
+
+                    // Performing whitelist check
+                    environmentFullName = "${customerName}-${projectName}-${environmentName}"
+                    if (allowedEnvironments.contains(environmentFullName)){
+                        println "${customerName}-${projectName}-${environmentName} environment is whitelisted, proceeding..."
+                    } else {
+                        println "${customerName}-${projectName}-${environmentName} environment doesn't allow pause-resume pipeline, exiting..."
+                        sh "exit 1"
+                    }
+
+                    sh("""
+                        rm -f .env
+                        echo 'export CUSTOMER_NAME=${customerName}' >> .env
+                        echo 'export PROJECT_NAME=${projectName}' >> .env
+                        echo 'export ENVIRONMENT_NAME=${environmentName}' >> .env
+                        echo 'export AWS_ACCOUNT_ID=${awsAccountID}' >> .env
+                        echo 'export ENVIRONMENT_GRADE=${environmentGrade}' >> .env
+                        echo 'export MONGO_MODE=${mongoMode}' >> .env
+                        echo 'export AWS_REGION=${awsRegion}' >> .env
+                        echo 'export GATE_KEEPING_CONFIRMED=${gateKeepingConfirmed}' >> .env
+                        echo 'export OPERATION=${operation}' >> .env
+                    """)
+
+                    sshagent(["build_accelbyte"]){
+                        sh('''
+                            GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" git clone -b master git@bitbucket.org:accelbyte/iac.git
+                            GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone -b master git@bitbucket.org:accelbyte/internal-infra-automation.git
+                            chmod -R +x internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts
+                            echo "export CURRENT_TIMESTAMP=$(date +%s)" >> .env
+
+                            # Performing terragrunt update
+                            ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/tg-update.sh
+                        ''')
+                        withCredentials([usernamePassword(credentialsId: 'Bitbucket_Build_EPP', usernameVariable: 'BB_AUTH_USERNAME', passwordVariable: 'BB_AUTH_PASSWORD')]) {
+                            sh('''
+                                echo "Performing assume role as automation-platform..."
+                                set +x
+                                source .env
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform \\
+                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform-terraform \\
+                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                aws sts get-caller-identity
+                                # Performing pause-resume lockfile and data bucket check
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/prepare-bucket.sh
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/lockfile.sh
+                            ''')
+                        }
+                    }
+
+                }
+                if (operation == "pause"){
+                    if (gateKeepingConfirmed ==  "true"){
+                        stage('Pausing Environment'){
+                            parallel(
+                                pre_pause_operation: {
+                                    if (includeFleet){
+                                        stage('Shutdown Fleet'){
+                                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                                sh('''
+                                                    source .env
+                                                    set +x
+                                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                        \$(aws sts assume-role \\
+                                                        --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform \\
+                                                        --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                        --output text))
+                                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                        \$(aws sts assume-role \\
+                                                        --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform-terraform \\
+                                                        --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                        --output text))
+                                                    set -x
+                                                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+                                                    kubectl config use-context arn:aws:eks:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+
+                                                    # Create job for deactivating fleet
+                                                    job_name="pausejob-ams-fleet-deactivator"
+                                                    kubectl create job --from=cronjob/ams-fleet-deactivator -n justice $job_name
+
+                                                    # Wait for the job to be completed
+                                                    kubectl wait --for=condition=complete --timeout=10m job/$job_name -n justice
+                                                ''')
+                                            }
+                                        }
+                                    }
+                                    stage('Pre-Pause Operation'){
+                                        timeout(time: 10, unit: 'MINUTES') { // this execution must no longer than 10 minutes
+                                            sh('''
+                                                source .env
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform \\
+                                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform-terraform \\
+                                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+                                                kubectl config use-context arn:aws:eks:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+                                                flux suspend source git --all || true
+                                                flux suspend source chart --all || true
+                                                flux suspend source helm --all || true
+                                                flux suspend source bucket --all || true
+
+                                                flux suspend image repository --all || true
+                                                flux suspend image update --all || true
+
+                                                flux suspend helmrelease --all -n linkerd || true
+                                                flux suspend helmrelease --all -n linkerd-jaeger || true
+                                                flux suspend helmrelease --all -n linkerd-smi || true
+
+                                                flux suspend kustomization --all || true
+                                                flux suspend kustomization -n justice --all || true
+                                                # ./flux suspend kustomization roles-seeding-job-kustomization -n justice || true
+                                                # kubectl patch cronjobs roles-seeding -n justice -p '{"spec" : {"suspend" : true }}' || true
+                                                kubectl scale deploy -n justice --all --replicas=0 || true
+
+                                                kubectl patch cronjobs -n default $(kubectl get cronjobs -n default | awk '{ print $1 }' | tail -n +2) -p '{"spec" : {"suspend" : true }}'
+                                                kubectl patch cronjobs -n justice $(kubectl get cronjobs -n justice | awk '{ print $1 }' | tail -n +2) -p '{"spec" : {"suspend" : true }}'
+
+                                                # Deleting remaining job pods if exist
+                                                kubectl delete pod -n default --all
+                                                kubectl delete pod -n justice --all  
+                                            ''')
+                                        }
+                                        if (environmentGrade == "dev"){
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                                kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/ebs-retain.sh -o pause -n postgresql -d postgresql -v data-postgresql12-0
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/ebs-retain.sh -o uploadssm
+                                            """)
+                                        }
+                                    }
+                                },
+                                destroy_elasticache: {
+                                    if (environmentGrade == "prod"){
+                                        stage('Backup Redis'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                                kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/redis-dump.sh -o backup
+                                            """)
+                                        }
+                                        stage('Destroy Elasticache'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticache' ]; then
+                                                    echo 'Elasticache directory does exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticache
+                                                    terragrunt run-all destroy --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Elastcache direcotry does not exist.'
+                                                    exit 0
+                                                fi
+                                                ls -al
+                                            """)
+                                        }
+                                    } else {
+                                        println "Environment grade is dev, skipped."
+                                    }
+                                },
+                                destroy_opensearch: {
+                                    if (environmentGrade == "prod"){
+                                        stage('Destroy Opensearch'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/opensearch' ]; then
+                                                    echo 'Opensearch directory exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/opensearch
+                                                    terragrunt run-all destroy --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Opensearch directory doesn not exist'
+                                                    exit 0
+                                                fi
+                                            """)
+                                        }
+                                    } else {
+                                        println "Environment grade is dev, skipped."
+                                    }
+                                },
+                                destroy_elasticsearch: {
+                                    if (environmentGrade == "prod"){
+                                        stage('Destroy Elasticsearch'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticsearch' ]; then
+                                                    echo 'Opensearch directory exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticsearch
+                                                    terragrunt run-all destroy --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Opensearch directory does not exist'
+                                                    exit 0
+                                                fi
+                                            """)
+                                        }
+                                    } else {
+                                        println "Environment grade is dev, skipped."
+                                    }
+                                },
+                                destroy_msk: {
+                                    if (includeMSK == "true"){
+                                        stage('Destroy MSK'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/msk' ]; then
+                                                    echo 'MSK directory exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/msk
+                                                    terragrunt run-all destroy --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                    aws secretsmanager delete-secret --secret-id AmazonMSK_auth_${customerName}-${projectName}-${environmentName}-${projectName} --force-delete-without-recovery --region us-east-2
+                                                else
+                                                    echo 'MSK directory does not exist'
+                                                    exit 0
+                                                fi
+                                            """)
+                                        }
+                                    } else {
+                                        println("MSK Excluded, skipping...")
+                                    }
+                                }
+                            )
+                        }
+                        stage('DB Validation & EKS Worker Cleanup'){
+                            sh("""
+                                source .env
+                                set +x
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/db-check.sh
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/killActivePort.sh
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/uploader.sh
+                            """)
+                        }
+                        stage('Cleanup Core Infra Component'){
+                            sshagent(["bitbucket-repo-read-only"]){
+                                
+                                sh("""
+                                    source .env
+                                    set +x
+                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                        \$(aws sts assume-role \\
+                                        --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                        --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                        --output text))
+                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                        \$(aws sts assume-role \\
+                                        --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                        --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                        --output text))
+                                    set -x
+                                    aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                    kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                    kubectl scale deployment --replicas=0 --all -n linkerd-jaeger || true
+                                    kubectl scale deployment --replicas=0 --all -n linkerd-smi || true
+                                    kubectl scale deployment --replicas=0 --all -n linkerd || true
+                                    kubectl scale deployment --replicas=0 --all -n emissary || true
+                                    kubectl delete provisioner --all || true
+                                    kubectl delete pdb -A --all
+                                    ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-ec2-flushed.sh
+                                """)
+                            }
+                        }
+                        stage('Stop AWS DOCDB and RDS'){
+                            
+                            sh("""
+                                set +x
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/stop-aws-rds-docdb.sh
+                            """)
+                        }
+                    }
+                }
+                if (operation == "resume"){
+                    if (gateKeepingConfirmed == "true"){
+                        stage('Apply SSO Roles'){
+                            
+                            sh("""
+                                set +x
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/sso_roles
+                                terragrunt apply --auto-approve
+                            """)
+                        }
+                        stage('Applying AWS Resource'){
+                            parallel(
+                                apply_elasticache: {
+                                    if (environmentGrade == "prod"){
+                                        stage('Apply Elasticache'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticache' ]; then
+                                                    echo 'Elasticache directory does exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticache
+                                                    terragrunt run-all apply --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Elastcache direcotry does not exist.'
+                                                    exit 0
+                                                fi
+                                                ls -al
+                                            """)
+                                        }
+                                    } else {
+                                        println "Environment grade is dev, skipped."
+                                    }
+                                },
+                                apply_opensearch: {
+                                    stage('Apply Opensearch'){
+                                        if (environmentGrade == "prod") {
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/opensearch' ]; then
+                                                    echo 'Opensearch directory does exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/opensearch
+                                                    terragrunt run-all apply --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Opensearch direcotry does not exist.'
+                                                    exit 0
+                                                fi
+                                                ls -al
+                                            """)
+                                        } else {
+                                            println "Environment grade is dev, skipped."
+                                        }
+                                    } 
+                                },
+                                apply_elasticsearch: {
+                                    stage('Apply Elasticsearch'){
+                                        
+                                        if (environmentGrade == "prod") {
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticsearch' ]; then
+                                                    echo 'Elasticache directory does exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/elasticsearch
+                                                    terragrunt run-all apply --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                else
+                                                    echo 'Elastcache direcotry does not exist.'
+                                                    exit 0
+                                                fi
+                                                ls -al
+                                            """)
+                                        } else {
+                                            println "Environment grade is dev, skipped."
+                                        }
+                                    }
+                                },
+                                apply_msk: {
+                                    if (includeMSK == "true"){
+                                        stage('Apply MSK'){
+                                            
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                if [ -d 'iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/msk' ]; then
+                                                    echo 'MSK directory exist.'
+                                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/msk
+                                                    terragrunt run-all apply --terragrunt-ignore-external-dependencies --auto-approve --terragrunt-non-interactive --terragrunt-parallelism 2
+                                                    cd ${WORKSPACE}
+                                                    ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/msk-post-script.sh
+                                                else
+                                                    echo 'MSK directory does not exist'
+                                                    exit 0
+                                                fi
+                                            """)
+                                        }
+                                    } else {
+                                        println("MSK Excluded, skipping...")
+                                    }
+                                },
+                                resume_docdb_rds: {
+                                    stage('Resume DOCDB and RDS'){
+                                        
+                                        if (environmentGrade == "dev"){
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/resume-docdb.sh
+                                            """)
+                                        }
+                                        if (environmentGrade == "prod"){
+                                            sh("""
+                                                set +x
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                    \$(aws sts assume-role \\
+                                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                    --output text))
+                                                set -x
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/resume-docdb.sh
+                                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/resume-rds-postgre.sh
+                                            """)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        stage('Environment re-Initializing'){
+                            parallel(
+                                apply_eks_irsa: {
+                                    stage('Apply EKS IRSA'){
+                                        
+                                        sh("""
+                                            set +x
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            set -x
+                                            cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/eks_irsa
+                                            terragrunt apply --auto-approve
+                                        """)
+                                    }
+                                },
+                                apply_karpenter_ssm: {
+                                    stage('Apply Karpenter SSM'){
+                                        
+                                        sh("""
+                                            set +x
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            set -x
+                                            cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/ssm/karpenter
+                                            terragrunt apply --auto-approve
+                                        """)
+                                    }
+                                }
+                            )
+                        }
+                        stage('Apply EKS Addon'){
+                            
+                            sh("""
+                                set +x
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                if [ -d iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/eks_addon ]; then
+                                    cd iac/live/${awsAccountID}/${customerName}/${projectName}/${awsRegion}/${environmentName}/eks_addon
+                                    terragrunt apply --auto-approve
+                                fi
+                            """)
+                        }
+                        stage('Resume Core Infra Workloads'){
+                            
+                            sh("""
+                                set +x 
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                    --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-up.sh -n flux-system -w kustomize-controller -k deployment -t 1800 -s kustomize-controller
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-up.sh -n flux-system -w source-controller -k deployment -t 1800 -s source-controller
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-up.sh -n flux-system -w helm-controller -k deployment -t 1800 -s helm-controller
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-up.sh -n karpenter -w karpenter -k deployment -t 1800 -s karpenter
+                                ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/resume-core-infra-workload.sh
+                            """)
+                        }
+                        if (environmentGrade == "prod"){
+                            stage('Restore Redis'){
+                                
+                                sh("""
+                                    set +x
+                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                        \$(aws sts assume-role \\
+                                        --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                        --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                        --output text))
+                                    export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                        \$(aws sts assume-role \\
+                                        --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                        --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                        --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                        --output text))
+                                    set -x
+                                    aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                    kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                    ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/db-validation/redis-dump.sh -o restore
+                                """)
+                            }
+                        } else {
+                            println "Environment grade is dev, skipped."
+                        }
+                        stage('Scaleup Justice'){
+                            parallel(
+                                scale_up_justice: {
+                                    stage('Scale up Justice Services'){
+                                        
+                                        sh("""
+                                            set +x
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                                \$(aws sts assume-role \\
+                                                --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                                --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                                --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                                --output text))
+                                            set -x
+                                            aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                            kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                            kubectl scale deploy -n justice justice-iam-service --replicas=1
+                                            ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/wait-up.sh -n justice -w justice-iam-service -k deployment -t 1800 -s justice-iam-service
+                                            kubectl scale deploy -n justice --all --replicas=1
+                                            if [ "\${customerName}-\${projectName}-\${environmentName}" == "loadtest-justice-prod" ]; then
+                                                export SKIPPED_SERVICE="\${loadtestServiceResumeException}"
+                                                for i in \$(echo "\${SKIPPED_SERVICE}"); do
+                                                    kubectl scale deploy -n justice "\$i" --replicas=0
+                                                done
+                                            fi
+
+
+                                            ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/extend-post-resume-script.sh || true
+                                        """)
+                                    }
+                                }
+                                // this might be useful for full teardown dev grade env
+                                // ,
+                                // resume_selfhosted_postgre: {
+                                //     stage('Resume Selfhosted Postgres'){
+                                //         if (environmentGrade == "dev"){
+                                //             sh("""
+                                //                 set +x
+                                //                 export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                //                     \$(aws sts assume-role \\
+                                //                     --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+                                //                     --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                //                     --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                //                     --output text))
+                                //                 export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                //                     \$(aws sts assume-role \\
+                                //                     --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform-terraform \\
+                                //                     --role-session-name ${customerName}-${projectName}-${environmentName} \\
+                                //                     --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                //                     --output text))
+                                //                 set -x
+                                //                 aws eks update-kubeconfig --region ${awsRegion} --name ${customerName}-${projectName}-${environmentName}
+                                //                 kubectl config use-context arn:aws:eks:${awsRegion}:${awsAccountID}:cluster/${customerName}-${projectName}-${environmentName}
+                                //                 flux suspend kustomization -n flux-system auto-delete-ebs
+                                //                 flux suspend kustomization -n flux-system deployments
+                                //                 ./internal-infra-automation/jenkins/jobs/pause-resume-environment/scripts/ebs-retain.sh -o resume -n postgresql -d postgresql -v data-postgresql12-0
+                                //             """)
+                                //         } else {
+                                //             println "Environment grade is PROD, skipping..."
+                                //         }
+                                //     }
+                                // }
+                            )
+                        }
+                        stage('Resume Jobs'){
+                            
+                            sh('''
+                                source .env
+                                set +x
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform \\
+                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+                                    \$(aws sts assume-role \\
+                                    --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-automation-platform-terraform \\
+                                    --role-session-name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME} \\
+                                    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+                                    --output text))
+                                set -x
+                                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+                                kubectl config use-context arn:aws:eks:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}
+                                kubectl patch cronjobs -n default $(kubectl get cronjobs -n default | awk '{ print $1 }' | tail -n +2) -p '{"spec" : {"suspend" : false }}'
+                                kubectl patch cronjobs -n justice $(kubectl get cronjobs -n justice | awk '{ print $1 }' | tail -n +2) -p '{"spec" : {"suspend" : false }}'
+                            ''')
+                        }
+                    }
+                }
+                stage("Creating Slack Finish Notif Repot"){
+                    stageBanner("STAGE: SENDING FINISH REPORT TO SLACK")
+                    if (sendNotification) {
+                        sendSlackReport(notifThreadId,"Operation *${operation.toUpperCase()}* for *${customerName}-${projectName}-${environmentName}* environment is successful :checked-1:")
+                    }
+                }
+                
+            }
+            catch(err){
+                echo "Exception thrown:\n ${err}"
+                if (sendNotification) {
+                    sendSlackReport(notifThreadId,"Operation *${operation.toUpperCase()}* for *${customerName}-${projectName}-${environmentName}* environment is failed :x:")
+                }
+                currentBuild.result = "FAILURE"
+            }
+        }
+    }
+}
+
+void stageBanner(String message) {
+    ansiColor('xterm'){
+        echo '\033[1;4;37;43m\033[0J --------------------------------------------------------------\033[0m'
+        echo '\033[1;4;33m' + ":: ${message}"
+        echo '\033[1;4;37;43m\033[0J --------------------------------------------------------------\033[0m'
+    }
+}
+
+void cleanUp(){
+    sh('''
+        rm -Rf iac/ || true
+        rm -Rf internal-infra-automation/ || true
+    ''')
+}
+
+void setAWSContext(){
+    sh("""
+        set +x
+        export \$(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+            \$(aws sts assume-role \\
+            --role-arn arn:aws:iam::${awsAccountID}:role/${customerName}-${projectName}-${environmentName}-automation-platform \\
+            --role-session-name ${customerName}-${projectName}-${environmentName} \\
+            --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+            --output text))
+    """)
+}
+
+def initialSlackNotif(String notifElements){
+    String notif = """
+{
+	"channel": "${slackChannelId}",
+    "blocks": [
+		{
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "*[${customerName.toUpperCase()}][${environmentName.toUpperCase()}] Environment ${operation.toUpperCase()} Operation Triggered* :alert-blue:"
+			}
+		},
+        {
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "Pipeline build URL: ${env.BUILD_URL}"
+			}
+		},
+		{
+			"type": "rich_text",
+			"block_id": "block1",
+			"elements": [
+				{
+					"type": "rich_text_section",
+					"elements": [
+						{
+							"type": "text",
+							"text": "Pipeline details :"
+						}
+					]
+				},
+				{
+					"type": "rich_text_list",
+					"style": "bullet",
+					"elements": [
+						${notifElements}
+					]
+				}
+			]
+		},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "Pipeline build result will be posted in reply."
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "cc: @releaseops-team @liveops-team"
+            }
+        }
+	]
+}
+    """
+    writeFile file: 'notif.json', text: notif
+    withCredentials([string(credentialsId: 'jenkins-report-slackbot-token', variable: 'ACCESS_TOKEN')]) {
+        sendNotif = sh (
+            returnStdout: true,
+            script:
+            """
+                curl -H "Content-type: application/json" \
+                    --data "@notif.json" \
+                    -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+                    -X POST https://slack.com/api/chat.postMessage | jq .ts
+            """
+        ).trim()
+        return sendNotif
+    }
+}
+
+def sendSlackReport(String threadId, String replyText){
+    String report = """
+{
+	"channel": "${slackChannelId}",
+    "thread_ts": ${threadId},
+    "blocks": [
+		{
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "${replyText}"
+			}
+		}
+	]
+}
+    """
+    writeFile file: 'report.json', text: report
+    withCredentials([string(credentialsId: 'jenkins-report-slackbot-token', variable: 'ACCESS_TOKEN')]) {
+        sh("""
+            cat report.json
+            curl -H "Content-type: application/json; charset=utf-8" \
+                --data "@report.json" \
+                -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+                -X POST https://slack.com/api/chat.postMessage
+            rm -f report.json
+        """)
+    }
+
+}

@@ -1,0 +1,135 @@
+- defaultTab: nodes
+  description: 'Use for pushing existing IAC repo in the tmp dir and create a Bitbucket
+    PR. Should be used altogether with Clone IAC Repo. '
+  executionEnabled: true
+  group: upstream
+  id: f4e42ed7-3528-4d3f-846f-1520cc06f8f1
+  loglevel: INFO
+  name: Push IAC Repo
+  nodeFilterEditable: false
+  options:
+  - hidden: true
+    name: applied_resources
+    value: '-'
+  - hidden: true
+    name: bitbucket_app_key
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/bitbucket_app_key
+    valueExposed: true
+  - hidden: true
+    name: bitbucket_ssh
+    secure: true
+    storagePath: keys/terraform/bitbucket
+    valueExposed: true
+  - description: Working directory that will be used to push the git repo. IAC repo
+      should have been cloned in the specified directory.
+    name: repo_path
+    required: true
+  - enforced: true
+    name: create_slack_notification
+    value: 'false'
+    values:
+    - 'false'
+    - 'true'
+    valuesListDelimiter: ','
+  - name: target_environment_name
+    required: true
+  - hidden: true
+    name: slack_bot_token
+    required: true
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/slack_bot_token
+    valueExposed: true
+  - hidden: true
+    name: slack_channel_id
+    required: true
+    value: C075QUV9KV4
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - description: push
+      script: "#!/usr/bin/env bash\nset -euo pipefail\n\nTARGET_ENVIRONMENT_NAME=\"\
+        $RD_OPTION_TARGET_ENVIRONMENT_NAME\"\n\nAWS_ACCOUNT_ID=\"$(echo $TARGET_ENVIRONMENT_NAME\
+        \ | cut -f1 -d',')\"\nAWS_REGION=\"$(echo $TARGET_ENVIRONMENT_NAME | cut -f3\
+        \ -d',')\"\nCUSTOMER_NAME=\"$(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d','\
+        \ | cut -f1 -d'-')\"\nPROJECT_NAME=\"$(echo $TARGET_ENVIRONMENT_NAME | cut\
+        \ -f2 -d',' | cut -f2 -d'-')\"\nENVIRONMENT_NAME=\"$(echo $TARGET_ENVIRONMENT_NAME\
+        \ | cut -f2 -d',' | cut -f3 -d'-')\"\n\npr_payload_template='{\"title\": \"\
+        \", \"source\": {\"branch\": {\"name\": \"\"}}, \"reviewers\": [], \"destination\"\
+        : {\"branch\": {\"name\": \"master\"}}, \"close_source_branch\": false}'\n\
+        \nif [[ $RD_OPTION_REPO_PATH == \"\" ]] || [[ -z $RD_OPTION_REPO_PATH ]];\
+        \ then\n    echo \"REPO_PATH is empty.\"\n    exit 1\nfi\n\nfunction create_iac_bitbucket_pr()\
+        \ {\n  branch=$1\n  readonly bitbucket_api_url=\"https://bitbucket.org/api/2.0/repositories/accelbyte\"\
+        \n\n  pr_payload=$(echo $pr_payload_template | yq '.title = \"feat: '\"$CUSTOMER_NAME-$PROJECT_NAME-$ENVIRONMENT_NAME\"\
+        ' autorightsizing - '\"${RD_JOB_EXECID}\"'\" | .source.branch.name = \"'\"\
+        ${branch}\"'\"')\n\n  curl -s -XPOST -H \"Content-Type: application/json\"\
+        \ -H \"Authorization: Basic ${RD_OPTION_BITBUCKET_APP_KEY}\" \"${bitbucket_api_url}/iac/pullrequests\"\
+        \ -d \"${pr_payload}\"\n}\n\nmkdir -p \"${HOME}/.ssh\"\ntouch \"${HOME}/.ssh/known_hosts\"\
+        \n\nif ! grep -q \"^bitbucket.org \" \"${HOME}/.ssh/known_hosts\"; then\n\
+        \  ssh-keyscan bitbucket.org >>\"${HOME}/.ssh/known_hosts\"\nfi\n\n# Prepare\
+        \ SSH Connection for Git\n# Create a temporary file\nTEMPFILE=$(mktemp)\n\
+        TEMPFILE2=$(mktemp)\nTEMPFILE3=$(mktemp)\n# Set a trap to delete the temporary\
+        \ file when the script exits\ntrap \"rm -f $TEMPFILE\" EXIT\ntrap \"rm -f\
+        \ $TEMPFILE2\" EXIT\ntrap \"rm -f $TEMPFILE3\" EXIT\necho \"bitbucket.org\
+        \ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQeJzhupRu0u0cdegZIa8e86EG2qOCsIsD1Xw0xSeiPDlCr7kq97NLmMbpKTX6Esc30NuoqEEHCuc7yWtwp8dI76EEEB1VqY9QJq6vk+aySyboD5QF61I/1WeTwu+deCbgKMGbUijeXhtfbxSxm6JwGrXrhBdofTsbKRUsrN1WoNgUa8uqN1Vx6WAJw1JHPhglEGGHea6QICwJOAr/6mrui/oB7pkaWKHj3z7d1IC4KWLtY47elvjbaTlkN04Kc/5LFEirorGYVbt15kAUlqGM65pk6ZBxtaO3+30LVlORZkxOh+LKL/BvbZ/iRNhItLqNyieoQj/uh/7Iv4uyH/cV/0b4WDSd3DptigWq84lJubb9t/DnZlrJazxyDCulTmKdOR7vs9gMTo+uoIrPSb8ScTtvw65+odKAlBj59dhnVp9zd7QUojOpXlL62Aw56U4oO+FALuevvMjiWeavKhJqlR7i5n9srYcrNV7ttmDw7kf/97P5zauIhxcjX+xHv4M=\"\
+        \ > $TEMPFILE3\necho \"@option.bitbucket_ssh@\" > $TEMPFILE\nsed -i -e 's/\
+        \ /\\n/g' $TEMPFILE\necho \"-----BEGIN OPENSSH PRIVATE KEY-----\" >> $TEMPFILE2\n\
+        cat $TEMPFILE >> $TEMPFILE2\necho \"-----END OPENSSH PRIVATE KEY-----\" >>\
+        \ $TEMPFILE2\n\n\necho \"[+] Navigating to $RD_OPTION_REPO_PATH/iac\"\ncd\
+        \ $RD_OPTION_REPO_PATH/iac\n\necho \"[+] Executing git remote show origin\"\
+        \nGIT_SSH_COMMAND=\"ssh -i ${TEMPFILE2} -o IdentitiesOnly=yes -o UserKnownHostsFile=${TEMPFILE3}\"\
+        \ git remote show origin\n\necho \"[+] Executing git config\"\ngit config\
+        \ user.email \"build@accelbyte.net\"\ngit config user.name \"Build AccelByte\"\
+        \n\nTARGET_BRANCH_NAME=\"autorightsizing-${AWS_ACCOUNT_ID}-${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}-${RD_JOB_EXECID}\"\
+        \n\ngit checkout -b \"$TARGET_BRANCH_NAME\"\n\ngit add . \ngit commit -am\
+        \ \"feat: $CUSTOMER_NAME-$PROJECT_NAME-$ENVIRONMENT_NAME autorightsizing -\
+        \ ${RD_JOB_EXECID}\"\nGIT_SSH_COMMAND=\"ssh -i ${TEMPFILE2} -o IdentitiesOnly=yes\
+        \ -o UserKnownHostsFile=${TEMPFILE3}\" git push --set-upstream origin \"$TARGET_BRANCH_NAME\"\
+        \ -f\n\necho \"[+] Creating PR for $TARGET_BRANCH_NAME\"\n\ncreate_pr=$(create_iac_bitbucket_pr\
+        \ \"$TARGET_BRANCH_NAME\")\n\nget_pr_link=$(cat <<< $create_pr | jq -r '.links.html.href')\n\
+        \necho \"RUNDECK:DATA:BITBUCKET_PR_LINK = $get_pr_link\"\n\n"
+    - description: slack-notify
+      script: "#!/bin/bash\n\n# vars\ntoken=\"$RD_OPTION_SLACK_BOT_TOKEN\"\nchannel=\"\
+        $RD_OPTION_SLACK_CHANNEL_ID\"\n\nTARGET_ENVIRONMENT_NAME=\"$RD_OPTION_TARGET_ENVIRONMENT_NAME\"\
+        \n\nAWS_ACCOUNT_ID=\"$(echo $TARGET_ENVIRONMENT_NAME | cut -f1 -d',')\"\n\
+        AWS_REGION=\"$(echo $TARGET_ENVIRONMENT_NAME | cut -f3 -d',')\"\nCUSTOMER_NAME=\"\
+        $(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f1 -d'-')\"\nPROJECT_NAME=\"\
+        $(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f2 -d'-')\"\nENVIRONMENT_NAME=\"\
+        $(echo $TARGET_ENVIRONMENT_NAME | cut -f2 -d',' | cut -f3 -d'-')\"\n\nslack_api_endpoint=\"\
+        https://slack.com/api/\"\n\n# payload_template='{\"channel\":\"\",\"text\"\
+        :\"\"}'\npayload_template='{\"channel\":\"\"}'\n\nbitbucket_pr_link=\"@data.BITBUCKET_PR_LINK@\"\
+        \n\nAPPLIED_RESOURCES=\"$RD_OPTION_APPLIED_RESOURCES\"\n\nfunction generator()\
+        \ {\n\n    if [[ $1 == \"\" ]] || [[ -z $1 ]]; then\n        requester_id=\"\
+        null\"\n    else\n        requester_id=\"<@${1}>\"\n    fi\n\n    printf '\\\
+        n*%s : Rightsizing request*' \"${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}\"\
+        \ \n    printf '\\nRequester: %s' \"$requester_id\"\n    printf '\\n'\n  \
+        \  printf '\\nEnvironment name: %s' \"${CUSTOMER_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}\"\
+        \n    printf '\\nRegion: %s' \"$AWS_REGION\"\n    printf '\\nSubaccount: %s'\
+        \ \"$AWS_ACCOUNT_ID\"\n    printf '\\n'\n    printf '\\nModified resources:\
+        \ '\n    for i in $APPLIED_RESOURCES; do\n        printf \"\\n\"\n       \
+        \ printf ' - %s' \"$i\"\n    done\n    printf '\\n'\n    printf '\\nBitbucket\
+        \ PR link: %s' \"$bitbucket_pr_link\"\n}\n\nfunction lookup() {\n    response=$(curl\
+        \ -s -XPOST -H \"Authorization: Bearer $token\" -d \"email=$1\" \"https://slack.com/api/users.lookupByEmail\"\
+        )\n    cat <<< $response | jq -r '.user.id'\n}\n\n\nfunction send_chat() {\n\
+        \    payload=$(cat <<< $payload_template | yq '.text = \"'\"$generate_text\"\
+        '\", .channel = \"'\"$channel\"'\"')\n    #response=$(curl -s -XPOST -H \"\
+        Authorization: Bearer $token\" -H 'Content-type: application/json' -d \"$payload\"\
+        \ \"$slack_api_endpoint/chat.postMessage\")\n    response=$(curl -s -XPOST\
+        \ -H \"Authorization: Bearer $token\" -d \"channel=$channel\" -d \"text=$generate_text\"\
+        \ \"$slack_api_endpoint/chat.postMessage\")\n    cat <<< $response\n}\n\n\n\
+        if [[ $RD_OPTION_CREATE_SLACK_NOTIFICATION == \"true\" ]]; then\n    id_lookup=$(lookup\
+        \ \"$RD_JOB_USER_EMAIL\")\n    \n    generate_text=$(generator \"$id_lookup\"\
+        )\n    send_chat\nfi\n    "
+    keepgoing: false
+    pluginConfig:
+      LogFilter:
+      - config:
+          invalidKeyPattern: \s|\$|\{|\}|\\
+          logData: 'false'
+          regex: ^RUNDECK:DATA:\s*([^\s]+?)\s*=\s*(.+)$
+          replaceFilteredResult: 'false'
+        type: key-value-data
+    strategy: node-first
+  uuid: f4e42ed7-3528-4d3f-846f-1520cc06f8f1

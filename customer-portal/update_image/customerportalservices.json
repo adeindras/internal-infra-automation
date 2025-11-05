@@ -1,0 +1,11 @@
+{
+  "customer-portal-audit-log-service": "cp-audit-log",
+  "customer-portal-login-app": "cp-login-app",
+  "customer-portal-app": "cp-portal-app",
+  "customer-portal-service-app": "cp-service-app",
+  "internal-customer-database-integration": "customer-database",
+  "justice-ic-service": "justice-ic-service",
+  "justice-kafka-connect-sink-v2": "kafka-connect-sink-v2",
+  "justice-metering-service-premium": "metering-service",
+  "justice-metering-service-premium-worker": "metering-worker"
+}

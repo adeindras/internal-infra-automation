@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ab-infra-manager
+  namespace: justice
+  labels:
+    app: ab-infra-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ab-infra-manager
+  template:
+    metadata:
+      labels:
+        app: ab-infra-manager
+        linkerd.io/inject: disabled
+      annotations:
+        linkerd.io/inject: disabled
+    spec:
+      serviceAccountName: ab-infra-manager-serviceaccount
+      containers:
+        - name: ab-infra-manager
+          image: 144436415367.dkr.ecr.us-west-2.amazonaws.com/ab-infra-manager:1.1.1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: ab-infra-manager
+          resources:
+            limits:
+              memory: "50Mi"
+              cpu: "50m"
+            requests:
+              memory: "50Mi"
+              cpu: "50m"
+          ports:
+            - containerPort: 8080
+              name: http-web-svc
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthchecker
+              port: http-web-svc
+            failureThreshold: 1
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthchecker
+              port: http-web-svc
+            failureThreshold: 30
+            periodSeconds: 10

@@ -1,0 +1,26 @@
+[
+	{
+		"function": "describe_db_instances",
+		"service": "rds"
+	},
+	{
+		"function": "describe_db_snapshots",
+		"service": "rds"
+	},
+	{
+		"function": "describe_db_clusters",
+		"service": "docdb"
+	},
+	{
+		"function": "describe_db_cluster_snapshots",
+		"service": "docdb"
+	},
+	{
+		"function": "describe_replication_groups",
+		"service": "elasticache"
+	},
+	{
+		"function": "describe_snapshots",
+		"service": "elasticache"
+	}
+]

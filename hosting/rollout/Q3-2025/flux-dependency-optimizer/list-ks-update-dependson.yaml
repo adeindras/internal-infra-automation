@@ -1,0 +1,24 @@
+# This file is managed by scripts/flux-dependency-optimizer.sh
+# to define the dependsOn for necessary kustomizations.
+# Do not edit manually unless you know what you are doing
+kustomization:
+  emissary-ingress:
+    dependsOn:
+      - name: cluster-variables
+  emissary-ingress-websocket:
+    dependsOn:
+      - name: cluster-variables
+  emissary-ingress-tracing:
+    dependsOn:
+      - name: cluster-variables
+  linkerd:
+    dependsOn:
+      - name: cluster-variables
+  postgresql12:
+    dependsOn:
+      - name: cluster-secrets
+  postgresql16:
+    dependsOn:
+      - name: cluster-secrets
+  cluster-variables:
+    dependsOn: []

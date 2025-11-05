@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: jenkins
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  serviceAccountName: jenkinscd-automation-platform
+  securityContext:
+    runAsUser: 1000
+  nodeSelector:
+    karpenter.sh/capacity-type: on-demand
+  containers:
+    - name: jnlp
+      image: 268237257165.dkr.ecr.us-east-2.amazonaws.com/uat-provisioner-jenkins-agent:0.0.4
+      resources:
+        requests:
+          memory: 3Gi
+          cpu: 2
+        limits:
+          memory: 3Gi

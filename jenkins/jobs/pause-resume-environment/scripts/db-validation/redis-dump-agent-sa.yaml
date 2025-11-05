@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<aws_account_id>:role/irsa_justice_pauseresume_<customer_name>_<project_name>_<environment_name>
+  labels:
+    app: pause-resume-redis-dump-job
+    component: justice-pause-resume
+  name: pause-resume-redis-dump-job
+  namespace: justice

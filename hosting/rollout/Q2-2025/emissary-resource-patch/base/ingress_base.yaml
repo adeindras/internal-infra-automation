@@ -1,0 +1,23 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS
+    alb.ingress.kubernetes.io/group.name: ingress-controller
+    alb.ingress.kubernetes.io/healthcheck-path: /ambassador/v0/check_alive
+    alb.ingress.kubernetes.io/healthcheck-port: "8877"
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-group-attributes: load_balancing.algorithm.type=least_outstanding_requests
+    alb.ingress.kubernetes.io/target-type: ip
+    getambassador.io/ambassador-id: websocket
+    kubernetes.io/ingress.class: alb
+  name: justice-websocket
+  namespace: emissary
+spec:
+  rules:
+    - host: "${ROUTE53_PUBLIC_ZONE_NAME}"
+      http:
+        paths: []

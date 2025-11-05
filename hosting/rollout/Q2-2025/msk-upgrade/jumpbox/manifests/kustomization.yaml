@@ -1,0 +1,9 @@
+# declare ConfigMap from a ConfigMapGenerator
+#
+resources:
+  - ./pod.yaml
+
+secretGenerator:
+- name: jumpbox-kafka-secrets
+  files:
+    - ssl-user-config.properties

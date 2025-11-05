@@ -1,0 +1,349 @@
+- defaultTab: nodes
+  description: ''
+  executionEnabled: true
+  group: downstream
+  id: a3eccf3e-6663-46d1-93ee-6e896acf5fa6
+  loglevel: INFO
+  maxMultipleExecutions: '100'
+  multipleExecutions: true
+  name: Bitbucket Webhook Handler & Job Dispatcher
+  nodeFilterEditable: false
+  notification:
+    onfailure:
+      plugin:
+        configuration:
+          slack_channel: alerts-autorightsizing-failures-prod
+          webhook_base_url: https://hooks.slack.com/services
+          webhook_token: T3WDKH0L8/B075R3TMUUE/UMlb8CeYPjkJk5XJRVna0pXV
+        type: SlackNotification
+    onsuccess:
+      plugin:
+        configuration:
+          slack_channel: alerts-autorightsizing-success-prod
+          webhook_base_url: https://hooks.slack.com/services
+          webhook_token: T3WDKH0L8/B076LGD90MN/mRPVt5L5WuVbpjLHm9zCU5gZ
+        type: SlackNotification
+  notifyAvgDurationThreshold: null
+  options:
+  - description: Option to pass incoming webhook payload.
+    hidden: true
+    label: whkpayload
+    name: whkpayload
+    required: true
+    value: default
+  - hidden: true
+    label: BB_COMMIT_STATUS_ACCESS_TOKEN
+    name: BB_COMMIT_STATUS_ACCESS_TOKEN
+    required: true
+    secure: true
+    storagePath: keys/project/tier-up-down-sandbox/bitbucket_iac_repo_commit_status_token
+    valueExposed: true
+  - description: Diff token from Bitbucket accelbyte/iac repository.
+    hidden: true
+    label: BB_IAC_REPO_DIFF_TOKEN
+    name: BB_IAC_REPO_DIFF_TOKEN
+    required: true
+    secure: true
+    storagePath: keys/project/tier-up-down-prod/bitbucket_iac_repo_diff_token
+    valueExposed: true
+  - description: Webhook URL to trigger terragrunt job
+    hidden: true
+    label: RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL
+    name: RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL
+    required: true
+    secure: true
+    storagePath: keys/project/tier-up-down-prod/rundeck_terragrunt_executor_webhook_url
+    valueExposed: true
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - script: |- 
+      #!/usr/bin/env bash
+      # Copyright (c) 2017-2024 AccelByte Inc. All Rights Reserved.
+      # This is licensed software from AccelByte Inc, for limitations
+      # and restrictions contact your company contract manager.
+
+      log() {
+          local level="$1"
+          local message="$2"
+          local timestamp
+          timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+          echo >&2 -e "${timestamp} [${level}] ${message}"
+      }
+
+      log_info() {
+          local message="$1"
+          log "INFO" "$message"
+      }
+
+      log_warn() {
+          local message="$1"
+          log "WARN" "$message"
+      }
+
+      log_error() {
+          local message="$1"
+          log "ERROR" "$message"
+      }
+
+      assert_is_installed() {
+          local -r name="$1"
+          if [[ ! $(command -v "${name}") ]]; then
+              log_error "The binary '$name' is required by this script but is not installed or in the system's PATH."
+              exit 1
+          fi
+      }
+
+      generate_terragrunt_job_webhook_payload() {
+          local MODIFIED_FOLDER_NAME="$1"
+          local BB_BRANCH="$2"
+          local BB_COMMIT_HASH="$3"
+          local PR_STATE="$4"
+          # TODO
+          # input validation on $MODIFIED_FOLDER_NAME
+          # input validation on $BB_BRANCH
+          # input validation on $BB_COMMIT_HASH
+          # input validation on $PR_STATE
+          cat <<EOF
+      {
+          "version": "2024-05-22",
+          "payload": {
+              "modified_folder": "$MODIFIED_FOLDER_NAME",
+              "bitbucket_branch": "$BB_BRANCH",
+              "bitbucket_commit_hash": "$BB_COMMIT_HASH",
+              "bitbucket_pull_request_state": "$PR_STATE"
+          }
+      }
+      EOF
+      }
+
+      dispatch_terragrunt_job() {
+          local WEBHOOK_URL="$1"
+          local MODIFIED_FOLDER_NAME="$2"
+          local BB_BRANCH="$3"
+          local BB_COMMIT_HASH="$4"
+          local PR_STATE="$5"
+
+          curl -sXPOST "$WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              --data \
+              "$(generate_terragrunt_job_webhook_payload "$MODIFIED_FOLDER_NAME" "$BB_BRANCH" "$BB_COMMIT_HASH" "$PR_STATE")"
+      }
+
+      generate_bitbucket_status_request_body() {
+          local EXECUTION_ID="$1"
+          local CURRENT_BUILD_DISPLAY_NAME="$2"
+          local BB_STATE="$3"
+          local EXEC_URL="$4"
+          cat <<EOF
+      {
+          "key": "RUNDECK-EXECUTION-${EXECUTION_ID}",
+          "name": "${CURRENT_BUILD_DISPLAY_NAME}",
+          "state": "$BB_STATE",
+          "description": "Rundeck Execution Pipeline",
+          "url": "${EXEC_URL}"
+      }
+      EOF
+      }
+
+      update_bitbucket_status() {
+          local BB_COMMIT_HASH="$1"
+          local BB_STATE="$2"
+          local BB_ACCESS_TOKEN="$3"
+          local MODIFIED_FOLDER_NAME="$4"
+          local EXECUTION_ID="$5"
+
+          RESOURCE_NAME=$(echo "${MODIFIED_FOLDER_NAME}" | cut -d '/' -f7-)
+          CLIENT_NAME=$(echo "${MODIFIED_FOLDER_NAME}" | awk -F'/' '{print $3}')
+          PROJECT_NAME=$(echo "${MODIFIED_FOLDER_NAME}" | awk -F'/' '{print $4}')
+          ENVIRONMENT_NAME=$(echo "${MODIFIED_FOLDER_NAME}" | awk -F'/' '{print $6}')
+          CLUSTER_NAME="${CLIENT_NAME}-${PROJECT_NAME}-${ENVIRONMENT_NAME}"
+          CURRENT_BUILD_DISPLAY_NAME="#${EXECUTION_ID} - ${RESOURCE_NAME} - ${CLUSTER_NAME}"
+
+          EXECUTION_URL="https://rundeck.prod.devportal.accelbyte.io/project/@job.project@/execution/show/$EXECUTION_ID#output"
+
+          log_info "Sending build status to bitbucket"
+
+          SEND_ATTEMPT=0
+          SEND_ATTEMPT_THRESHOLD=3
+
+          while true; do
+              API_STATUS_CODE=$(curl -sXPOST "https://api.bitbucket.org/2.0/repositories/accelbyte/iac/commit/${BB_COMMIT_HASH}/statuses/build" \
+                  -H "Authorization: Bearer ${BB_ACCESS_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -o /dev/null \
+                  -w "%{http_code}" \
+                  --data \
+                  "$(generate_bitbucket_status_request_body "$EXECUTION_ID" "$CURRENT_BUILD_DISPLAY_NAME" "$BB_STATE" "$EXECUTION_URL")")
+
+              if [[ "${API_STATUS_CODE}" == "200" ]] || [[ "${API_STATUS_CODE}" == "201" ]]; then
+                  log_info "Build status successfully sent to bitbucket"
+                  break
+              else
+                  SEND_ATTEMPT=$(( SEND_ATTEMPT + 1 ))
+                  if [[ "${SEND_ATTEMPT}" -ge "${SEND_ATTEMPT_THRESHOLD}" ]]; then
+                      log_error "Unable to send build status to bitbucket after ${SEND_ATTEMPT_THRESHOLD} retry"
+                      return 1
+                  fi
+
+                  log_error "Unable to send build status to bitbucket retrying in 5 seconds"
+                  sleep 5
+              fi
+          done
+      }
+
+      main() {
+          assert_is_installed "jq"
+          assert_is_installed "awk"
+          assert_is_installed "curl"
+          assert_is_installed "sed"
+          assert_is_installed "sort"
+          assert_is_installed "cut"
+          assert_is_installed "grep"
+
+          BB_WEBHOOK_PAYLOAD='@unquotedoption.whkpayload@'
+          BB_DIFF_TOKEN="@option.BB_IAC_REPO_DIFF_TOKEN@"
+          RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL="@option.RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL@"
+          BB_COMMIT_STATUS_ACCESS_TOKEN="@option.BB_COMMIT_STATUS_ACCESS_TOKEN@"
+
+          # input validation
+          if [[ "${BB_WEBHOOK_PAYLOAD}" == "default" ]]; then
+              log_error "Webhook payload is empty"
+              return 1
+          fi
+
+          if [[ -z "${RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL}" ]]; then
+              log_error "Terragrunt Job's Webhook URL is empty"
+              return 1
+          fi
+
+          IS_BB_WEBHOOK_PAYLOAD_VALID=$(
+              echo "${BB_WEBHOOK_PAYLOAD}" | jq empty
+              echo "$?"
+          )
+          if [[ "${IS_BB_WEBHOOK_PAYLOAD_VALID}" -gt "0" ]]; then
+              log_error "Webhook payload is invalid"
+              return 1
+          fi
+
+          if [[ -z "${BB_COMMIT_STATUS_ACCESS_TOKEN}" ]]; then
+              log_error "Commit status token is empty"
+              return 1
+          fi
+
+          # branch validation
+          BB_PULL_REQUEST_IDENTIFIER="autorightsizing"
+          CHANGES_PULL_REQUEST_BRANCH_NAME=$(echo "${BB_WEBHOOK_PAYLOAD}" | jq -r '.pullrequest.source.branch.name')
+
+          if [[ -z "${CHANGES_PULL_REQUEST_BRANCH_NAME}" || "${CHANGES_PULL_REQUEST_BRANCH_NAME}" == "null" ]]; then
+              log_info "Branch Name : ${CHANGES_PULL_REQUEST_BRANCH_NAME}"
+              log_info "Not a rightsizing event, skipping..."
+              return 0
+          fi
+
+          CHANGES_BRANCH_IDENTIFIER=$(echo "${CHANGES_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $1}')
+
+          if [[ "${CHANGES_BRANCH_IDENTIFIER}" != "${BB_PULL_REQUEST_IDENTIFIER}" ]]; then
+              log_info "Branch Name : ${CHANGES_PULL_REQUEST_BRANCH_NAME}"
+              log_info "Not a rightsizing event, skipping..."
+              return 0
+          fi
+
+          ACTOR=$(echo "${BB_WEBHOOK_PAYLOAD}" | jq -r '.actor.display_name')
+          CHANGES_COMMIT_HASH=$(echo "${BB_WEBHOOK_PAYLOAD}" | jq -r '.pullrequest.source.commit.hash')
+          CHANGES_AWS_ACCOUNT_ID=$(echo "${CHANGES_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $2}')
+          CHANGES_CLIENT_NAME=$(echo "${CHANGES_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $3}')
+          CHANGES_PROJECT_NAME=$(echo "${CHANGES_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $4}')
+          CHANGES_ENVIRONMENT_NAME=$(echo "${CHANGES_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $5}')
+          CHANGES_CLUSTER_NAME="${CHANGES_CLIENT_NAME}-${CHANGES_PROJECT_NAME}-${CHANGES_ENVIRONMENT_NAME}"
+          PULL_REQUEST_STATE=$(echo "${BB_WEBHOOK_PAYLOAD}" | jq -r '.pullrequest.state')
+
+          # TODO
+          # input validation for $PULL_REQUEST_STATE
+          # input validation for $CHANGES_COMMIT_HASH
+
+          if [[ "${PULL_REQUEST_STATE}" == "MERGED" ]]; then
+              SUBMITTED_COMMIT_HASH="$(echo "${BB_WEBHOOK_PAYLOAD}" | jq -r '.pullrequest.merge_commit.hash')"
+          else
+              SUBMITTED_COMMIT_HASH="${CHANGES_COMMIT_HASH}"
+          fi
+
+          log_info "Actor                 : ${ACTOR}"
+          log_info "Commit Hash           : ${SUBMITTED_COMMIT_HASH}"
+          log_info "Branch Name           : ${CHANGES_PULL_REQUEST_BRANCH_NAME}"
+          log_info "AWS Account ID        : ${CHANGES_AWS_ACCOUNT_ID}"
+          log_info "Cluster Name          : ${CHANGES_CLUSTER_NAME}"
+          log_info "Pull Request State    : ${PULL_REQUEST_STATE}"
+
+          if [[ "${PULL_REQUEST_STATE}" == "MERGED" ]]; then
+              # changes traversal
+              DIFF="$(curl -sXGET -H "Authorization: Bearer ${BB_DIFF_TOKEN}" "https://api.bitbucket.org/2.0/repositories/accelbyte/iac/diff/${SUBMITTED_COMMIT_HASH}" |
+                  grep -E '^\+\+\+ b/' |
+                  cut -d ' ' -f2- |
+                  cut -c3- |
+                  grep terragrunt.hcl |
+                  sed 's/terragrunt\.hcl//g' |
+                  sort -u)"
+          else
+              # get latest commit from master
+              LATEST_MASTER_COMMIT_HASH="$(curl -sXGET -H "Authorization: Bearer ${BB_DIFF_TOKEN}" "https://api.bitbucket.org/2.0/repositories/accelbyte/iac/commits/master?pagelen=1" | jq -r '.values[0].hash')"
+
+              # changes traversal
+              DIFF="$(curl -sXGET -H "Authorization: Bearer ${BB_DIFF_TOKEN}" "https://api.bitbucket.org/2.0/repositories/accelbyte/iac/diff/${SUBMITTED_COMMIT_HASH}..${LATEST_MASTER_COMMIT_HASH}" |
+                  grep -E '^\+\+\+ b/' |
+                  cut -d ' ' -f2- |
+                  cut -c3- |
+                  grep terragrunt.hcl |
+                  sed 's/terragrunt\.hcl//g' |
+                  sort -u)"
+          fi
+
+          if [[ -z "${DIFF}" || "${DIFF}" == "null" ]]; then
+              log_info "No modified terragrunt.hcl file from the commit diff, skipping the entire pipeline"
+              return 0
+          fi
+
+          echo "${DIFF}" | while read -r LINE; do
+              # TODO
+              # input validation for $LINE
+              log_info "Modified folder: ${LINE%?}"
+              log_info "Changes from live directory"
+
+              CLIENT_NAME=$(echo "${LINE%?}" | awk -F'/' '{print $3}')
+              PROJECT_NAME=$(echo "${LINE%?}" | awk -F'/' '{print $4}')
+              ENVIRONMENT_NAME=$(echo "${LINE%?}" | awk -F'/' '{print $6}')
+              CLUSTER_NAME="$CLIENT_NAME-$PROJECT_NAME-$ENVIRONMENT_NAME"
+
+              if [[ "${CLUSTER_NAME}" != "${CHANGES_CLUSTER_NAME}" ]]; then
+                  log_info "Modified cluster name doesn't match with the specified cluster name in branch"
+                  log_info "Skipping changes from ${LINE%?}"
+                  continue
+              else
+                  log_info "Modified cluster name matched with specified cluster name branch"
+                  log_info "Start to dispatch job for ${LINE%?} changes"
+                  WEBHOOK_RESPONSE=$(dispatch_terragrunt_job \
+                      "${RUNDECK_TERRAGRUNT_JOB_WEBHOOK_URL}" \
+                      "${LINE%?}" \
+                      "${CHANGES_PULL_REQUEST_BRANCH_NAME}" \
+                      "${SUBMITTED_COMMIT_HASH}" \
+                      "${PULL_REQUEST_STATE}")
+
+                  EXECUTION_ID="$(echo "${WEBHOOK_RESPONSE}" | jq -r '.executionId')"
+                  EXECUTION_URL="https://rundeck.prod.devportal.accelbyte.io/project/@job.project@/execution/show/$EXECUTION_ID#output"
+
+                  update_bitbucket_status \
+                      "${SUBMITTED_COMMIT_HASH}" \
+                      "INPROGRESS" \
+                      "${BB_COMMIT_STATUS_ACCESS_TOKEN}" \
+                      "${LINE%?}" \
+                      "${EXECUTION_ID}" && sleep 5 && log_info "Succesfully trigger terragrunt job" && log_info "Execution url: ${EXECUTION_URL}"
+              fi
+          done
+      }
+
+      main "$@"
+    keepgoing: false
+    strategy: sequential
+  uuid: a3eccf3e-6663-46d1-93ee-6e896acf5fa6

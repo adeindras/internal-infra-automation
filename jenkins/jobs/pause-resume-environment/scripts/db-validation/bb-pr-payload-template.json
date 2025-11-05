@@ -1,0 +1,15 @@
+{
+  "title": "",
+  "source": {
+    "branch": {
+      "name": ""
+    }
+  },
+  "reviewers": [],
+  "destination": {
+    "branch": {
+      "name": "master"
+    }
+  },
+  "close_source_branch": false
+}

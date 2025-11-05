@@ -1,0 +1,49 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta1
+kind: Kustomization
+metadata:
+  name: valkey-justice
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: flux
+  interval: 6h
+  path: ./manifests/platform/valkey/v3.0.3
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: iac-repo
+  validation: client
+  postBuild:
+    substitute:
+      RELEASE_NAME_SUFFIX: "-justice"
+      VALKEY_ARCHITECTURE: "standalone"
+      VALKEY_REPLICA_COUNT: "1"
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta1
+kind: Kustomization
+metadata:
+  name: valkey-justice-primary-forwarder
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: flux
+  interval: 1h
+  path: ./manifests/platform/justice-forwarder
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: iac-repo
+  validation: client
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+    substitute:
+      APP_NAME: valkey-justice-primary
+      NAMESPACE: tools
+      REMOTE_HOST: valkey-justice-primary.valkey
+      REMOTE_PORT: "'6379'"

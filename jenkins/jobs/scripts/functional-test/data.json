@@ -1,0 +1,12 @@
+{
+  "preDefined": {
+    "baseURLDirect": "",
+    "namespace": "",
+    "namespacePublisher": "",
+    "clientId": "",
+    "clientSecret": "",
+    "globalUserEmailSuperuser": "",
+    "globalUserPasswordSuperuser": ""
+  },
+  "seed": {}
+}

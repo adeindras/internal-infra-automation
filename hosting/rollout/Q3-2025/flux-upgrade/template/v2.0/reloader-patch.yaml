@@ -1,0 +1,28 @@
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: patch
+        annotations:
+          reloader.stakater.com/auto: "true"
+    target:
+      kind: Deployment
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: patch
+        annotations:
+          reloader.stakater.com/auto: "true"
+    target:
+      kind: StatefulSet
+  - patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: patch
+        annotations:
+          reloader.stakater.com/auto: "true"
+    target:
+      kind: DaemonSet

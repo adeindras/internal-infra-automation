@@ -1,0 +1,33 @@
+Statement:
+  Action:
+    - eks:DescribeCluster
+    - eks:AccessKubernetesApi
+    - ssm:GetParametersByPath
+    - ssm:GetParameters
+    - ssm:GetParameter
+    - ssm:DescribeParameters
+    - ec2:DescribePrefixLists
+    - ec2:DescribeSnapshots
+    - rds:DescribeDBInstanceAutomatedBackups
+    - rds:RestoreDBInstanceFromDBSnapshot
+    - rds:DescribeDBSnapshots
+    - rds:DescribeDBClusterSnapshots
+    - logs:ListTagsForResource
+    - cloudwatch:ListTagsForResource
+    - logs:DescribeMetricFilters
+    - docdb-elastic:CopyClusterSnapshot
+    - docdb-elastic:CreateCluster
+    - docdb-elastic:CreateClusterSnapshot
+    - docdb-elastic:DeleteCluster
+    - docdb-elastic:DeleteClusterSnapshot
+    - docdb-elastic:GetCluster
+    - docdb-elastic:GetClusterSnapshot
+    - docdb-elastic:ListClusterSnapshots
+    - docdb-elastic:ListClusters
+    - docdb-elastic:ListTagsForResource
+    - docdb-elastic:RestoreClusterFromSnapshot
+    - docdb-elastic:StartCluster
+    - docdb-elastic:StopCluster
+    - docdb-elastic:TagResource
+    - docdb-elastic:UntagResource
+    - docdb-elastic:UpdateCluster

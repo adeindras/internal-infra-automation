@@ -1,0 +1,73 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ags-infrastructure
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cluster-variables
+    - name: cluster-secrets
+  interval: 10m0s
+  path: ./overlays/infrastructure-stack/tier-1
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: ags-infrastructure-platform-repo
+  validation: client
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+      - kind: Secret
+        name: karpenter-secret
+      - kind: Secret
+        name: cluster-secret
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ags-karpenter-templates
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cluster-variables
+    - name: cluster-secrets
+  interval: 10m0s
+  path: ./custom/default/dev/karpenter-templates/tier-1
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: ags-infrastructure-platform-repo
+  validation: client
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+      - kind: Secret
+        name: karpenter-secret
+      - kind: Secret
+        name: cluster-secret
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ags-observability
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: monitoring
+  interval: 10m0s
+  path: ./overlays/observability-stack/tier-1
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: ags-infrastructure-platform-repo
+  validation: client
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+      - kind: Secret
+        name: grafana-cloud-secret
+      - kind: Secret
+        name: cluster-secret

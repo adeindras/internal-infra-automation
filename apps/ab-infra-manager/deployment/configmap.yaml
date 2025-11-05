@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ab-infra-manager
+  namespace: justice
+data:
+  CCU: "" # CCU Setup
+  KUSTOMIZATION_RESOURCES: "" #resource watcher
+  LIVE: "false"
+  AWS_USAGE_SCRAPE_INTERVAL: "24h" # scraped every n hours. Default: 24 hours.
+  AWS_USAGE_TIME_RANGE: "336h" # metrics time range. Default: 2 weeks (336 hours).

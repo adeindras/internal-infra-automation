@@ -1,0 +1,3 @@
+accelbyte-customerportal-dev
+accelbyte-customerportal-prod
+accelbyte-customerportal-stg

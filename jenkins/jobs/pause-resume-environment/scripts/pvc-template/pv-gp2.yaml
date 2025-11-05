@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  annotations:
+    kubernetes.io/createdby: aws-ebs-dynamic-provisioner
+    pv.kubernetes.io/bound-by-controller: "yes"
+    pv.kubernetes.io/migrated-to: ebs.csi.aws.com
+    pv.kubernetes.io/provisioned-by: kubernetes.io/aws-ebs
+  finalizers:
+  - kubernetes.io/pv-protection
+  - external-attacher/ebs-csi-aws-com
+  labels:
+    topology.kubernetes.io/region: <region>
+    topology.kubernetes.io/zone: <az_name>
+  name: <pv_name>-resumed
+spec:
+  accessModes:
+  - ReadWriteOnce
+  awsElasticBlockStore:
+    fsType: ext4
+    volumeID: <volume_id>
+  capacity:
+    storage: <pv_size>
+  claimRef:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    name: <pvc_name>
+    namespace: <pvc_namespace>
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+          - <az_name>
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: <sc_name>
+  volumeMode: Filesystem

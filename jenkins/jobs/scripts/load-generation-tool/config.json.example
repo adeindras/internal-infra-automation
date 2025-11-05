@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "userLoginPassword": "", // random string and number
+      "baseURLDirect": "", // get this from parameter store e.g. (/eks/sandbox/justice/dev/justice_base_url)
+      "baseUrlWs": "", // fill wss://<baseURLDirect>
+      "namespacePublisher": "", // get this from parameter store e.g.(/eks/sandbox/justice/dev/justice_publisher_namespace)
+      "namespaceGame": "", // you decide where to test, all the test should be run in gamenamespace
+      "adminEmail": "", // get this from parameter store e.g. (/eks/sandbox/justice/dev/justice-iam-service/superuser)
+      "adminPassword": "", // get this from parameter store e.g (/eks/sandbox/justice/dev/justice-iam-service/superuser_password)
+      "clientId": "", // get this from parameter store in iam clientid e.g. (/eks/sandbox/justice/dev/justice-iam-service/iam_client_id)
+      "clientSecret": "", // get this from parameter store in iam client secret e.g. (/eks/sandbox/justice/dev/justice-iam-service/iam_client_secret)
+      "gameRecordKey": "sandGame", //static value
+      "statCode": "lgtstatcode123", //static value
+      "virtualCurrency": "LGTC", //static value
+      "sessionTemplate": "test-LG-session-conf", //static value
+      "matchRuleset": "test-LG-match-rule", //static value
+      "matchPool": "test-LG-match-pool" //static value
+    }
+  ],
+  "seed": [] // this will be seeded if you run k6_runner.sh
+}

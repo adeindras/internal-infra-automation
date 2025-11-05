@@ -1,0 +1,35 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: emissary-ingress-websocket
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: linkerd
+    - name: emissary-ingress
+  interval: 10m0s
+  path: ./manifests/platform/emissary-ingress/v3.5.2/websocket-karpenter-cw
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: iac-repo
+  validation: client
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+    substitute:
+      EMISSARY_WEBSOCKET_MIN_REPLICAS: "2"
+      EMISSARY_WEBSOCKET_MAX_REPLICAS: "40"
+      EMISSARY_WEBSOCKET_HPA_CPU_THRESHOLD: "40"
+      EMISSARY_WEBSOCKET_HPA_SCALE_DOWN_SELECT_POLICY: "Min"
+      EMISSARY_WEBSOCKET_TSC_WHEN_UNSATISFIABLE: "DoNotSchedule"
+      EMISSARY_WEBSOCKET_TSC_TOPOLOGY_KEY: "kubernetes.io/hostname"
+      EMISSARY_WEBSOCKET_TSC_MAX_SKEW: "1"
+      LINKERD_PROXY_PRESTOP_TIME_SLEEP_SECONDS: "'90'"
+      EMISSARY_CPU_REQUEST: "800m"
+      EMISSARY_MEMORY_REQUEST: "1500Mi"
+      EMISSARY_MEMORY_LIMT: "1500Mi"
+      LINKERD_PROXY_CPU_REQUEST: "800m"
+      LINKERD_PROXY_MEMORY_REQUEST: "1500Mi"
+      LINKERD_PROXY_MEMORY_LIMIT: "1500Mi"

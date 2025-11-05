@@ -1,0 +1,7 @@
+[profile jenkins]
+role_arn=${AWS_ROLE_ARN}
+web_identity_token_file=${AWS_WEB_IDENTITY_TOKEN_FILE}
+
+[profile default]
+role_arn=arn:aws:iam::${AWS_ACCOUNT_ID}:role/${EKS_CLUSTER_NAME}-config-deploy-tool
+source_profile = jenkins

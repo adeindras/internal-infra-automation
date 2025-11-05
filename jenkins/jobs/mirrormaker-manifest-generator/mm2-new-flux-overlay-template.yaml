@@ -1,0 +1,55 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta1
+kind: Kustomization
+metadata:
+  name: rightsize-kafka-mirrormaker2
+  namespace: flux-system
+spec:
+  interval: 1h
+  path: ./manifests/platform/rightsize-kafka-mirrormaker2
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  targetNamespace: justice
+  postBuild:
+    substitute:
+      TOPIC_WHITELIST: ".*"
+      OFFSET_RESET_POLICY: "earliest"
+      REPLICA_COUNT: "2"
+      SOURCE_MSK_BOOTSTRAP_SERVERS_SSM_PATH: "/path/to/ssm/parameters"
+      SOURCE_MSK_SASL_USERNAME_SSM_PATH: "/path/to/ssm/parameters"
+      SOURCE_MSK_SASL_PASSWORD_SSM_PATH: "/path/to/ssm/parameters"
+      TARGET_MSK_BOOTSTRAP_SERVERS_SSM_PATH: "/path/to/ssm/parameters"
+      TARGET_MSK_SASL_USERNAME_SSM_PATH: "/path/to/ssm/parameters"
+      TARGET_MSK_SASL_PASSWORD_SSM_PATH: "/path/to/ssm/parameters"
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-variables
+  patches:
+    - patch: |-
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: patch
+          annotations:
+            reloader.stakater.com/auto: "true"
+      target:
+        kind: Deployment
+    - patch: |-
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: patch
+          annotations:
+            reloader.stakater.com/auto: "true"
+      target:
+        kind: StatefulSet
+    - patch: |-
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: patch
+          annotations:
+            reloader.stakater.com/auto: "true"
+      target:
+        kind: DaemonSet

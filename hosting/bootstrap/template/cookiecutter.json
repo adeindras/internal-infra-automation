@@ -1,0 +1,9 @@
+{
+  "project_name": "Hosting Maintenance Pipeline",
+  "project_slug": "{{ cookiecutter.project_name.lower().replace(' ', '-') }}",
+  "author": "Hosting-Platform",
+  "clone_iac": true,
+  "clone_deployments": true,
+  "fiscal_quarter": "Q1-2025",
+  "job_image": "268237257165.dkr.ecr.us-west-2.amazonaws.com/rollout-pipeline:1.0.2"
+}

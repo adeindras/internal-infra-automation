@@ -1,0 +1,65 @@
+- defaultTab: nodes
+  description: 'Use for cloning IAC repo. Not for plain git clone job execution. '
+  executionEnabled: true
+  group: upstream
+  id: e981b6ee-142b-4de3-89f7-b1956db22de2
+  loglevel: INFO
+  name: Clone IAC Repo
+  nodeFilterEditable: true
+  options:
+  - hidden: true
+    name: bitbucket_ssh
+    secure: true
+    storagePath: keys/terraform/bitbucket
+    valueExposed: true
+  - description: Working directory that will be used to clone the git repo
+    name: repo_path
+    required: true
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - description: clone
+      script: |+
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # IFS='-' read -r CLIENT_NAME PRODUCT_NAME ENVIRONMENT_TYPE <<< "$RD_NODE_ENVIRONMENT_NAME"
+
+        if [[ $RD_OPTION_REPO_PATH == "" ]] || [[ -z $RD_OPTION_REPO_PATH ]]; then
+            echo "REPO_PATH is empty."
+            exit 1
+        fi
+
+        # Prepare SSH Connection for Git
+        # Create a temporary file
+        TEMPFILE=$(mktemp)
+        TEMPFILE2=$(mktemp)
+        TEMPFILE3=$(mktemp)
+        # Set a trap to delete the temporary file when the script exits
+        trap "rm -f $TEMPFILE" EXIT
+        trap "rm -f $TEMPFILE2" EXIT
+        trap "rm -f $TEMPFILE3" EXIT
+        echo "bitbucket.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQeJzhupRu0u0cdegZIa8e86EG2qOCsIsD1Xw0xSeiPDlCr7kq97NLmMbpKTX6Esc30NuoqEEHCuc7yWtwp8dI76EEEB1VqY9QJq6vk+aySyboD5QF61I/1WeTwu+deCbgKMGbUijeXhtfbxSxm6JwGrXrhBdofTsbKRUsrN1WoNgUa8uqN1Vx6WAJw1JHPhglEGGHea6QICwJOAr/6mrui/oB7pkaWKHj3z7d1IC4KWLtY47elvjbaTlkN04Kc/5LFEirorGYVbt15kAUlqGM65pk6ZBxtaO3+30LVlORZkxOh+LKL/BvbZ/iRNhItLqNyieoQj/uh/7Iv4uyH/cV/0b4WDSd3DptigWq84lJubb9t/DnZlrJazxyDCulTmKdOR7vs9gMTo+uoIrPSb8ScTtvw65+odKAlBj59dhnVp9zd7QUojOpXlL62Aw56U4oO+FALuevvMjiWeavKhJqlR7i5n9srYcrNV7ttmDw7kf/97P5zauIhxcjX+xHv4M=" > $TEMPFILE3
+        echo "@option.bitbucket_ssh@" > $TEMPFILE
+        sed -i -e 's/ /\n/g' $TEMPFILE
+        echo "-----BEGIN OPENSSH PRIVATE KEY-----" >> $TEMPFILE2
+        cat $TEMPFILE >> $TEMPFILE2
+        echo "-----END OPENSSH PRIVATE KEY-----" >> $TEMPFILE2
+
+        echo "Checking out iac with path @option.checkout_path@"
+
+        DATETIME_NOW=$(date +%s)
+
+        # TMPDIR=$(mktemp -d)
+
+        REPO_PATH="${RD_OPTION_REPO_PATH}"
+        mkdir -p $REPO_PATH
+        cd $REPO_PATH
+
+        GIT_SSH_COMMAND="ssh -i ${TEMPFILE2} -o IdentitiesOnly=yes -o UserKnownHostsFile=${TEMPFILE3}" git clone --depth 1 --quiet "git@bitbucket.org:accelbyte/iac.git"
+
+    keepgoing: false
+    strategy: node-first
+  uuid: e981b6ee-142b-4de3-89f7-b1956db22de2

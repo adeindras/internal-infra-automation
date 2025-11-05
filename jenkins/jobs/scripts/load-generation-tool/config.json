@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "userLoginPassword": "",
+      "baseURLDirect": "",
+      "baseUrlWs": "",
+      "namespacePublisher": "",
+      "namespaceGame": "",
+      "adminEmail": "",
+      "adminPassword": "",
+      "clientId": "",
+      "clientSecret": "",
+      "gameRecordKey": "sandGame",
+      "statCode": "lgtstatcode123",
+      "virtualCurrency": "LGTC",
+      "sessionTemplate": "test-LG-session-conf",
+      "matchRuleset": "test-LG-match-rule",
+      "matchPool": "test-LG-match-pool"
+    }
+  ],
+  "seed": []
+}

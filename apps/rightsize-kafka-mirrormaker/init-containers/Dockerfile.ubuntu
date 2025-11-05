@@ -1,0 +1,14 @@
+# Use the Ubuntu base image
+FROM public.ecr.aws/docker/library/ubuntu:22.04
+
+# Add bash, coreutils, and any other tools you need (like kafkacat)
+RUN apt-get update && apt-get install -y bash coreutils kafkacat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy your script from your local context into the image
+COPY init-script-mirrormaker1.sh /usr/local/bin/init-script-mirrormaker1.sh
+COPY init-script-mirrormaker2.sh /usr/local/bin/init-script-mirrormaker2.sh
+
+# Make sure it's executable
+RUN chmod +x /usr/local/bin/init-script-mirrormaker1.sh
+RUN chmod +x /usr/local/bin/init-script-mirrormaker2.sh

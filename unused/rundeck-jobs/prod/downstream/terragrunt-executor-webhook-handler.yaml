@@ -1,0 +1,178 @@
+- defaultTab: nodes
+  description: ''
+  executionEnabled: true
+  group: downstream
+  id: 66228bae-69b3-4da1-b6cf-fa5b54a56ff3
+  loglevel: INFO
+  maxMultipleExecutions: '100'
+  multipleExecutions: true
+  name: Terragrunt Executor Webhook Handler
+  nodeFilterEditable: false
+  notification:
+    onfailure:
+      plugin:
+        configuration:
+          slack_channel: '#alerts-autorightsizing-failures-prod'
+          webhook_base_url: https://hooks.slack.com/services
+          webhook_token: T3WDKH0L8/B075R3TMUUE/UMlb8CeYPjkJk5XJRVna0pXV
+        type: SlackNotification
+    onsuccess:
+      plugin:
+        configuration:
+          slack_channel: alerts-autorightsizing-success-prod
+          webhook_base_url: https://hooks.slack.com/services
+          webhook_token: T3WDKH0L8/B076LGD90MN/mRPVt5L5WuVbpjLHm9zCU5gZ
+        type: SlackNotification
+  notifyAvgDurationThreshold: null
+  options:
+  - description: Webhook payload
+    label: whkpayload
+    name: whkpayload
+    required: true
+    value: default
+  plugins:
+    ExecutionLifecycle: null
+  scheduleEnabled: true
+  sequence:
+    commands:
+    - plugins:
+        LogFilter:
+        - config:
+            invalidKeyPattern: \s|\$|\{|\}|\\
+            logData: 'true'
+            regex: ^RUNDECK:DATA:\s*([^\s]+?)\s*=\s*(.+)$
+            replaceFilteredResult: 'false'
+          type: key-value-data
+      script: |
+        #!/usr/bin/env bash
+        # Copyright (c) 2017-2024 AccelByte Inc. All Rights Reserved.
+        # This is licensed software from AccelByte Inc, for limitations
+        # and restrictions contact your company contract manager.
+        set -euo pipefail
+
+        log() {
+            local level="$1"
+            local message="$2"
+            local timestamp
+            timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+            echo >&2 -e "${timestamp} [${level}] ${message}"
+        }
+
+        log_info() {
+            local message="$1"
+            log "INFO" "$message"
+        }
+
+        log_warn() {
+            local message="$1"
+            log "WARN" "$message"
+        }
+
+        log_error() {
+            local message="$1"
+            log "ERROR" "$message"
+        }
+
+        assert_is_installed() {
+            local -r name="$1"
+            if [[ ! $(command -v "${name}") ]]; then
+                log_error "The binary '$name' is required by this script but is not installed or in the system's PATH."
+                exit 1
+            fi
+        }
+
+        main() {
+            assert_is_installed "jq"
+            assert_is_installed "awk"
+
+            TG_WEBHOOK_PAYLOAD='@unquotedoption.whkpayload@'
+
+            # input validation
+            if [[ "${TG_WEBHOOK_PAYLOAD}" == "default" ]]; then
+                log_error "Webhook payload is empty"
+                return 1
+            fi
+
+            IS_TG_WEBHOOK_PAYLOAD_VALID=$(
+                echo "${TG_WEBHOOK_PAYLOAD}" | jq empty
+                echo "$?"
+            )
+            if [[ "${IS_TG_WEBHOOK_PAYLOAD_VALID}" -gt "0" ]]; then
+                log_error "Webhook payload is invalid"
+                return 1
+            fi
+
+            # TODO
+            # input validation on webhook payload version (is the payload schema version still supported?)
+
+            BB_PULL_REQUEST_IDENTIFIER="autorightsizing"
+            BB_PULL_REQUEST_BRANCH_NAME=$(echo "${TG_WEBHOOK_PAYLOAD}" | jq -r '.payload.bitbucket_branch')
+
+            if [[ -z "${BB_PULL_REQUEST_BRANCH_NAME}" || "${BB_PULL_REQUEST_BRANCH_NAME}" == "null" ]]; then
+                log_info "Branch Name : ${BB_PULL_REQUEST_BRANCH_NAME}"
+                log_info "Not a rightsizing event, skipping..."
+                return 0
+            fi
+
+            BB_BRANCH_IDENTIFIER=$(echo "${BB_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $1}')
+
+            if [[ "${BB_BRANCH_IDENTIFIER}" != "${BB_PULL_REQUEST_IDENTIFIER}" ]]; then
+                log_info "Branch Name : ${BB_PULL_REQUEST_BRANCH_NAME}"
+                log_info "Not a rightsizing event, skipping..."
+                return 0
+            fi
+
+            MODIFIED_FOLDER_NAME=$(echo "${TG_WEBHOOK_PAYLOAD}" | jq -r '.payload.modified_folder')
+            BB_COMMIT_HASH=$(echo "${TG_WEBHOOK_PAYLOAD}" | jq -r '.payload.bitbucket_commit_hash')
+            AWS_ACCOUNT_ID=$(echo "${BB_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $2}')
+            #BB_ENVIRONMENT_NAME=$(echo "${BB_PULL_REQUEST_BRANCH_NAME}" | awk -F'-' '{print $3}')
+            PULL_REQUEST_STATE=$(echo "${TG_WEBHOOK_PAYLOAD}" | jq -r '.payload.bitbucket_pull_request_state')
+
+            CLIENT_NAME=$(echo "$MODIFIED_FOLDER_NAME" | awk -F'/' '{print $3}')
+            PROJECT_NAME=$(echo "$MODIFIED_FOLDER_NAME" | awk -F'/' '{print $4}')
+            ENVIRONMENT_NAME=$(echo "$MODIFIED_FOLDER_NAME" | awk -F'/' '{print $6}')
+            CLUSTER_NAME="$CLIENT_NAME-$PROJECT_NAME-$ENVIRONMENT_NAME"
+
+            # TODO
+            # input validation for $PULL_REQUEST_STATE
+            # input validation for $CHANGES_COMMIT_HASH
+
+            log_info "Modified Folder Name  : ${MODIFIED_FOLDER_NAME}"
+            log_info "Commit Hash           : ${BB_COMMIT_HASH}"
+            log_info "Branch Name           : ${BB_PULL_REQUEST_BRANCH_NAME}"
+            # log_info "AWS Account ID        : ${CHANGES_AWS_ACCOUNT_ID}"
+            # log_info "Environment Name      : ${CHANGES_ENVIRONMENT_NAME}"
+            log_info "Pull Request State    : ${PULL_REQUEST_STATE}"
+
+            echo "RUNDECK:DATA:AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}"
+            echo "RUNDECK:DATA:BB_BRANCH_NAME=${BB_PULL_REQUEST_BRANCH_NAME}"
+            echo "RUNDECK:DATA:BB_COMMIT_HASH=${BB_COMMIT_HASH}"
+            echo "RUNDECK:DATA:BB_MODIFIED_FOLDER_NAME=${MODIFIED_FOLDER_NAME}"
+            echo "RUNDECK:DATA:BB_PULL_REQUEST_STATE=${PULL_REQUEST_STATE}"
+            echo "RUNDECK:DATA:CLUSTER_NAME=${CLUSTER_NAME}"
+            echo "RUNDECK:DATA:EXECUTION_ID=@job.execid@"
+        }
+
+        main "$@"
+    - errorhandler:
+        jobref:
+          args: -AWS_ACCOUNT_ID ${data.AWS_ACCOUNT_ID} -BB_BRANCH_NAME ${data.BB_BRANCH_NAME}
+            -BB_COMMIT_HASH ${data.BB_COMMIT_HASH} -BB_MODIFIED_FOLDER_NAME ${data.BB_MODIFIED_FOLDER_NAME}
+            -EXECUTION_ID ${data.EXECUTION_ID}
+          group: downstream
+          name: Bitbucket Send Failed Build Status
+          nodeStep: 'true'
+          uuid: 3f343afe-788a-4032-82b0-1db4c4991523
+      jobref:
+        args: -AWS_ACCOUNT_ID ${data.AWS_ACCOUNT_ID} -BB_BRANCH_NAME ${data.BB_BRANCH_NAME}
+          -BB_COMMIT_HASH ${data.BB_COMMIT_HASH} -BB_MODIFIED_FOLDER_NAME ${data.BB_MODIFIED_FOLDER_NAME}
+          -BB_PULL_REQUEST_STATE ${data.BB_PULL_REQUEST_STATE}
+        group: downstream
+        name: Terragrunt Executor Worker
+        nodeStep: 'true'
+        nodefilters:
+          filter: ${data.AWS_ACCOUNT_ID}.${data.CLUSTER_NAME}.iam_terraform
+        uuid: d673a8bb-1605-4619-b9fd-6613d24b76ad
+    keepgoing: false
+    strategy: sequential
+  uuid: 66228bae-69b3-4da1-b6cf-fa5b54a56ff3

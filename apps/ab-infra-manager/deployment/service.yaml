@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ab-infra-manager
+  namespace: justice
+  annotations:
+    prometheus.io/scrape: "true"      
+    prometheus.io/path: /metrics
+    prometheus.io/scheme: http
+spec:
+  selector:
+    app: ab-infra-manager
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http-web-svc
